@@ -95,8 +95,11 @@ class SpoolmanClient:
     def find(self, uid_hex, spool_id=None):
         # The RFID tag's own spool_id (when present) is an exact reference and
         # cheaper to look up than scanning every spool's extra fields, so try
-        # it first and only fall back to UID matching.
-        result = self.find_by_spool_id(spool_id)
-        if result is not None:
-            return result
+        # it first. Only fall back to UID matching when the tag has no
+        # spool_id at all - if the spool_id lookup already retried ATTEMPTS
+        # times and failed, that's almost certainly a network issue, and
+        # retrying ATTEMPTS more times with a different query just doubles
+        # the wait for the same likely outcome.
+        if spool_id is not None:
+            return self.find_by_spool_id(spool_id)
         return self.find_by_uid(uid_hex)
