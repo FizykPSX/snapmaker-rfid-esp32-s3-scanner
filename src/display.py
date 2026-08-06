@@ -49,6 +49,17 @@ class LCDDisplay:
 
         self._buf = bytearray(self.DISPLAY_WIDTH * self.DISPLAY_HEIGHT * 2)
         self._fb = framebuf.FrameBuffer(self._buf, self.DISPLAY_WIDTH, self.DISPLAY_HEIGHT, framebuf.RGB565)
+
+        # Pre-allocated once and reused every show() - extracting strips via
+        # FrameBuffer.blit() (C implementation) instead of a per-row Python copy
+        # loop turned a ~590ms redraw into ~50ms.
+        self._strips = []
+        for tx in range(0, self.DISPLAY_WIDTH, self.STRIP_WIDTH):
+            w = min(self.STRIP_WIDTH, self.DISPLAY_WIDTH - tx)
+            buf = bytearray(w * self.DISPLAY_HEIGHT * 2)
+            fb = framebuf.FrameBuffer(buf, w, self.DISPLAY_HEIGHT, framebuf.RGB565)
+            self._strips.append((tx, w, buf, fb))
+
         self.clear()
         self.show()
 
@@ -71,15 +82,9 @@ class LCDDisplay:
         self._fb.fill(0)
 
     def show(self):
-        row_bytes = self.DISPLAY_WIDTH * 2
-        for tx in range(0, self.DISPLAY_WIDTH, self.STRIP_WIDTH):
-            w = min(self.STRIP_WIDTH, self.DISPLAY_WIDTH - tx)
-            strip = bytearray(w * 2 * self.DISPLAY_HEIGHT)
-            for row in range(self.DISPLAY_HEIGHT):
-                src_start = row * row_bytes + tx * 2
-                src_end = src_start + w * 2
-                strip[row * w * 2:(row + 1) * w * 2] = self._buf[src_start:src_end]
-            self.tft.blit_buffer(strip, tx, 0, w, self.DISPLAY_HEIGHT)
+        for tx, w, buf, fb in self._strips:
+            fb.blit(self._fb, -tx, 0)
+            self.tft.blit_buffer(buf, tx, 0, w, self.DISPLAY_HEIGHT)
 
     def text(self, text, line=0, offset_x=0, color=None):
         self._fb.text(

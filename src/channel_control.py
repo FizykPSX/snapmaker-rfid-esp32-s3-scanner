@@ -14,11 +14,12 @@ class ChannelState:
     BAD_DATA = 4
 
 class ChannelControl:
-    def __init__(self, channel_num, display):
+    def __init__(self, channel_num, display, spoolman_client=None):
         self.channel_num = channel_num
         self.state = ChannelState.EMPTY
         self.last_data = None
         self.display = display
+        self.spoolman_client = spoolman_client
         self.no_data_timer = None
         self.last_data_text = CharTextScroller()
         self.last_data_text_timer = None
@@ -34,7 +35,12 @@ class ChannelControl:
                     print(f"Data read from channel {self.channel_num}: {data} (UID: {bytes(uid).hex()})")
                     if DataValidator.validate(data):
                         self.state = ChannelState.DATA
-                        self.last_data = {'payload': data, 'uid': uid}
+                        self.last_data = {'payload': data, 'uid': uid, 'spoolman': None}
+                        if self.spoolman_client is not None:
+                            try:
+                                self.last_data['spoolman'] = self.spoolman_client.find_by_uid(bytes(uid).hex())
+                            except Exception as e:
+                                print("Spoolman lookup failed:", e)
                         self.last_data_text.set_text(self.parse_data_for_display())
                         self.last_data_text_timer = PeriodicTimer(200)
                     else:
