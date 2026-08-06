@@ -1,6 +1,7 @@
 import socket
 import json
 import sys
+import time
 
 class SpoolmanClient:
     def __init__(self, cfg):
@@ -9,7 +10,7 @@ class SpoolmanClient:
         self.port = cfg.get("port", 7912)
         self.extra_field = cfg.get("extra_field", "card_uids")
 
-    def _get(self, path):
+    def _get_once(self, path):
         s = None
         try:
             addr = socket.getaddrinfo(self.host, self.port)[0][-1]
@@ -36,13 +37,23 @@ class SpoolmanClient:
 
             body = response.split(b"\r\n\r\n", 1)[1]
             return json.loads(body)
-        except Exception as e:
-            print("Error querying Spoolman:", e)
-            sys.print_exception(e)
-            return None
         finally:
             if s:
                 s.close()
+
+    def _get(self, path):
+        # WiFi can hiccup right after RFID/I2C activity - one retry is enough
+        # to ride out a transient failure without making a failed lookup feel
+        # any slower than the RFID read itself already is.
+        for attempt in (1, 2):
+            try:
+                return self._get_once(path)
+            except Exception as e:
+                if attempt == 2:
+                    print("Error querying Spoolman:", e)
+                    sys.print_exception(e)
+                    return None
+                time.sleep_ms(300)
 
     @staticmethod
     def _summarize(spool):
