@@ -7,7 +7,7 @@ class SpoolmanClient:
         self.enabled = cfg.get("enabled", False)
         self.host = cfg.get("host")
         self.port = cfg.get("port", 7912)
-        self.extra_field = cfg.get("extra_field", "rfid_uid")
+        self.extra_field = cfg.get("extra_field", "card_uids")
 
     def find_by_uid(self, uid_hex):
         if not self.enabled:
@@ -36,10 +36,11 @@ class SpoolmanClient:
             body = response.split(b"\r\n\r\n", 1)[1]
             spools = json.loads(body)
 
+            uid_hex = uid_hex.lower()
             for spool in spools:
                 extra = spool.get("extra", {})
                 value = extra.get(self.extra_field)
-                if value and uid_hex in value:
+                if value and uid_hex in value.lower():
                     filament = spool.get("filament", {})
                     return {
                         "remaining_weight": spool.get("remaining_weight"),

@@ -28,9 +28,9 @@
   },
 
   "spoolman": {
-    "enabled": false,
+    "enabled": true,
     "host": "IP_ADDRESS_OF_SPOOLMAN",
     "port": 7912,
-    "extra_field": "rfid_uid"
+    "extra_field": "card_uids"
   }
 }
