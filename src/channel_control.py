@@ -38,7 +38,8 @@ class ChannelControl:
                         self.last_data = {'payload': data, 'uid': uid, 'spoolman': None}
                         if self.spoolman_client is not None:
                             try:
-                                self.last_data['spoolman'] = self.spoolman_client.find_by_uid(bytes(uid).hex())
+                                spool_id = json.loads(data).get('spool_id')
+                                self.last_data['spoolman'] = self.spoolman_client.find(bytes(uid).hex(), spool_id)
                             except Exception as e:
                                 print("Spoolman lookup failed:", e)
                         self.last_data_text.set_text(self.parse_data_for_display())

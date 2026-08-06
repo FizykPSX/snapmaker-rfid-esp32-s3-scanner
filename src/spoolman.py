@@ -9,10 +9,7 @@ class SpoolmanClient:
         self.port = cfg.get("port", 7912)
         self.extra_field = cfg.get("extra_field", "card_uids")
 
-    def find_by_uid(self, uid_hex):
-        if not self.enabled:
-            return None
-
+    def _get(self, path):
         s = None
         try:
             addr = socket.getaddrinfo(self.host, self.port)[0][-1]
@@ -20,7 +17,7 @@ class SpoolmanClient:
             s.settimeout(5)
             s.connect(addr)
             request = (
-                "GET /api/v1/spool?allow_archived=false HTTP/1.1\r\n"
+                f"GET {path} HTTP/1.1\r\n"
                 f"Host: {self.host}\r\n"
                 "Connection: close\r\n\r\n"
             )
@@ -33,21 +30,12 @@ class SpoolmanClient:
                     break
                 response += chunk
 
+            status_line = response.split(b"\r\n", 1)[0]
+            if b" 200 " not in status_line:
+                return None
+
             body = response.split(b"\r\n\r\n", 1)[1]
-            spools = json.loads(body)
-
-            uid_hex = uid_hex.lower()
-            for spool in spools:
-                extra = spool.get("extra", {})
-                value = extra.get(self.extra_field)
-                if value and uid_hex in value.lower():
-                    filament = spool.get("filament", {})
-                    return {
-                        "remaining_weight": spool.get("remaining_weight"),
-                        "filament_name": filament.get("name"),
-                    }
-
-            return None
+            return json.loads(body)
         except Exception as e:
             print("Error querying Spoolman:", e)
             sys.print_exception(e)
@@ -55,3 +43,43 @@ class SpoolmanClient:
         finally:
             if s:
                 s.close()
+
+    @staticmethod
+    def _summarize(spool):
+        filament = spool.get("filament", {})
+        return {
+            "remaining_weight": spool.get("remaining_weight"),
+            "filament_name": filament.get("name"),
+        }
+
+    def find_by_spool_id(self, spool_id):
+        if not self.enabled or spool_id is None:
+            return None
+        spool = self._get(f"/api/v1/spool/{spool_id}")
+        return self._summarize(spool) if spool else None
+
+    def find_by_uid(self, uid_hex):
+        if not self.enabled:
+            return None
+
+        spools = self._get("/api/v1/spool?allow_archived=false")
+        if not spools:
+            return None
+
+        uid_hex = uid_hex.lower()
+        for spool in spools:
+            extra = spool.get("extra", {})
+            value = extra.get(self.extra_field)
+            if value and uid_hex in value.lower():
+                return self._summarize(spool)
+
+        return None
+
+    def find(self, uid_hex, spool_id=None):
+        # The RFID tag's own spool_id (when present) is an exact reference and
+        # cheaper to look up than scanning every spool's extra fields, so try
+        # it first and only fall back to UID matching.
+        result = self.find_by_spool_id(spool_id)
+        if result is not None:
+            return result
+        return self.find_by_uid(uid_hex)
