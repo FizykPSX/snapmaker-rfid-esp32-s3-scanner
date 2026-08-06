@@ -100,7 +100,12 @@ class ChannelControl:
         elif self.state == ChannelState.BAD_DATA:
             return "Bad data"
 
+    # Two grid rows per channel (LINE_HEIGHT each) since it's rendered at 2x scale.
+    ROWS_PER_CHANNEL = 2
+    FIRST_ROW = 2
+
     def render(self, selected):
+        line = self.FIRST_ROW + (self.channel_num - 1) * self.ROWS_PER_CHANNEL
         prefix = "> " if selected else "  "
-        self.display.clear_text_bg(self.channel_num)  # Clear the line explicitly
-        self.display.show_message(f"{prefix}CH {self.channel_num} {self.state_to_text()}", start_line=self.channel_num, clear=False, wrapped=False)
+        self.display.clear_text_bg(line, scale=2)
+        self.display.show_message(f"{prefix}CH {self.channel_num} {self.state_to_text()}", start_line=line, clear=False, wrapped=False, scale=2)

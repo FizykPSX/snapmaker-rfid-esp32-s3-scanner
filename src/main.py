@@ -31,7 +31,8 @@ channels = [ChannelControl(i + 1, display, spoolman) for i in range(4)]
 APP_NAME = "U1 RFID Reader"
 MENU_ITEMS = ["CH 1", "CH 2", "CH 3", "CH 4", "Send Data"]
 
-DETAIL_START_LINE = 7
+SEND_DATA_LINE = 10
+DETAIL_START_LINE = 11
 DETAIL_SWATCH_X = display.DISPLAY_WIDTH - 40
 DETAIL_SWATCH_Y = DETAIL_START_LINE * display.LINE_HEIGHT
 DETAIL_SWATCH_SIZE = 30
@@ -82,7 +83,7 @@ try:
             machine.soft_reset()
             break
 
-        display.show_message(APP_NAME, start_line=0, clear=False)
+        display.show_message(APP_NAME, start_line=0, clear=False, wrapped=False, scale=2)
 
         for i, channel in enumerate(channels):
             selected = (cursor_position == i)
@@ -91,8 +92,8 @@ try:
 
         send_data_selected = (cursor_position == 4)
         send_data_text = "> Send Data" if send_data_selected else "  Send Data"
-        display.clear_text_bg(5)
-        display.show_message(send_data_text, start_line=5, clear=False)
+        display.clear_text_bg(SEND_DATA_LINE)
+        display.show_message(send_data_text, start_line=SEND_DATA_LINE, clear=False)
 
         selected_channel = channels[cursor_position] if cursor_position < len(channels) else None
         render_detail_panel(selected_channel)
@@ -102,24 +103,24 @@ try:
         elif action == Action.ACTIVATE:
             if cursor_position == 4:
                 send_data_text = "> Sending "
-                display.clear_text_bg(5)
-                display.show_message(send_data_text, start_line=5, clear=False)
+                display.clear_text_bg(SEND_DATA_LINE)
+                display.show_message(send_data_text, start_line=SEND_DATA_LINE, clear=False)
 
                 for i, channel in enumerate(channels):
                     if channel.state == ChannelState.EMPTY:
                         send_data_text += '.'
-                        display.clear_text_bg(5)
-                        display.show_message(send_data_text, start_line=5, clear=False)
+                        display.clear_text_bg(SEND_DATA_LINE)
+                        display.show_message(send_data_text, start_line=SEND_DATA_LINE, clear=False)
                     elif channel.state == ChannelState.DATA:
                         send_data_text += 'D'
-                        display.clear_text_bg(5)
-                        display.show_message(send_data_text, start_line=5, clear=False)
+                        display.clear_text_bg(SEND_DATA_LINE)
+                        display.show_message(send_data_text, start_line=SEND_DATA_LINE, clear=False)
 
                         ok = printer.send_filament_data(i, channel.last_data)
 
                         send_data_text = send_data_text[:-1] + ('O' if ok else 'X')
-                        display.clear_text_bg(5)
-                        display.show_message(send_data_text, start_line=5, clear=False)
+                        display.clear_text_bg(SEND_DATA_LINE)
+                        display.show_message(send_data_text, start_line=SEND_DATA_LINE, clear=False)
                         time.sleep(1)
 
         time.sleep_ms(30)

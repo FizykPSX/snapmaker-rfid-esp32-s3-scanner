@@ -60,6 +60,11 @@ class LCDDisplay:
         self._strip_buf = bytearray(self.STRIP_WIDTH * self.DISPLAY_HEIGHT * 2)
         self._strip_fb = framebuf.FrameBuffer(self._strip_buf, self.STRIP_WIDTH, self.DISPLAY_HEIGHT, framebuf.RGB565)
 
+        # Reused scratch space for scaled text() calls - allocating a fresh
+        # buffer per call (every redraw, every loop iteration) fragmented the
+        # heap enough to reliably break WiFi connect() (verified on hardware).
+        self._scale_scratch_buf = bytearray(self.MAX_SCALED_CHARS * 8 * 8 * 2)
+
         self.clear()
         self.show()
 
@@ -78,6 +83,10 @@ class LCDDisplay:
     # it entirely, so show() always sends the frame in strips of this width.
     STRIP_WIDTH = 80
 
+    # Longest string ever passed to text(..., scale>1) - the scratch buffer
+    # sized off this is allocated once and reused for every scaled draw.
+    MAX_SCALED_CHARS = 24
+
     def clear(self):
         self._fb.fill(0)
 
@@ -87,42 +96,57 @@ class LCDDisplay:
             self._strip_fb.blit(self._fb, -tx, 0)
             self.tft.blit_buffer(self._strip_buf, tx, 0, w, self.DISPLAY_HEIGHT)
 
-    def text(self, text, line=0, offset_x=0, color=None):
-        self._fb.text(
-            text,
-            self.DISPLAY_X_OFFSET + offset_x,
-            self.DISPLAY_Y_OFFSET + line * self.LINE_HEIGHT,
-            color if color is not None else self.color565(255, 255, 255),
-        )
+    def text(self, text, line=0, offset_x=0, color=None, scale=1):
+        color = color if color is not None else self.color565(255, 255, 255)
+        x = self.DISPLAY_X_OFFSET + offset_x
+        y = self.DISPLAY_Y_OFFSET + line * self.LINE_HEIGHT
+        if scale == 1:
+            self._fb.text(text, x, y, color)
+            return
 
-    def wrapped_text(self, text, start_line=0, offset_x=0, color=None):
+        # framebuf has no built-in scaled text: render into a small scratch
+        # buffer at 1x, then blow each source pixel up into a scale x scale
+        # block. Fine for the short single-line labels this is used for.
+        text = text[:self.MAX_SCALED_CHARS]
+        glyph_w, glyph_h = 8 * len(text), 8
+        scratch_mv = memoryview(self._scale_scratch_buf)[:glyph_w * glyph_h * 2]
+        scratch = framebuf.FrameBuffer(scratch_mv, glyph_w, glyph_h, framebuf.RGB565)
+        scratch.fill(0)
+        scratch.text(text, 0, 0, color)
+        for sy in range(glyph_h):
+            for sx in range(glyph_w):
+                if scratch.pixel(sx, sy):
+                    self._fb.fill_rect(x + sx * scale, y + sy * scale, scale, scale, color)
+
+    def wrapped_text(self, text, start_line=0, offset_x=0, color=None, scale=1):
         line = start_line
+        line_width = self.LINE_WIDTH // scale
 
         for paragraph in text.split("\n"):
             while paragraph:
-                self.text(paragraph[:self.LINE_WIDTH], line, offset_x=offset_x, color=color)
-                paragraph = paragraph[self.LINE_WIDTH:]
-                line += 1
+                self.text(paragraph[:line_width], line, offset_x=offset_x, color=color, scale=scale)
+                paragraph = paragraph[line_width:]
+                line += scale
 
         return line
 
-    def show_message(self, text, start_line=0, clear=True, offset_x=0, wrapped=True, color=None):
+    def show_message(self, text, start_line=0, clear=True, offset_x=0, wrapped=True, color=None, scale=1):
         if clear:
             self.clear()
         if wrapped:
-            next_line = self.wrapped_text(text, start_line=start_line, offset_x=offset_x, color=color)
+            next_line = self.wrapped_text(text, start_line=start_line, offset_x=offset_x, color=color, scale=scale)
         else:
-            self.text(text, line=start_line, offset_x=offset_x, color=color)
-            next_line = start_line + 1
+            self.text(text, line=start_line, offset_x=offset_x, color=color, scale=scale)
+            next_line = start_line + scale
         self.show()
         return next_line
 
-    def clear_text_bg(self, line):
-        self._fb.fill_rect(self.DISPLAY_X_OFFSET, self.DISPLAY_Y_OFFSET + line * self.LINE_HEIGHT, self.DISPLAY_WIDTH, self.LINE_HEIGHT, 0)
+    def clear_text_bg(self, line, scale=1):
+        self._fb.fill_rect(self.DISPLAY_X_OFFSET, self.DISPLAY_Y_OFFSET + line * self.LINE_HEIGHT, self.DISPLAY_WIDTH, self.LINE_HEIGHT * scale, 0)
 
-    def clear_text_bg_after_text(self, line, text):
-        text_width = len(text) * self.CHAR_WIDTH
-        self._fb.fill_rect(self.DISPLAY_X_OFFSET + text_width, self.DISPLAY_Y_OFFSET + line * self.LINE_HEIGHT, self.DISPLAY_WIDTH - text_width, self.LINE_HEIGHT, 0)
+    def clear_text_bg_after_text(self, line, text, scale=1):
+        text_width = len(text) * self.CHAR_WIDTH * scale
+        self._fb.fill_rect(self.DISPLAY_X_OFFSET + text_width, self.DISPLAY_Y_OFFSET + line * self.LINE_HEIGHT, self.DISPLAY_WIDTH - text_width, self.LINE_HEIGHT * scale, 0)
 
     def swatch(self, x, y, w, h, color_hex):
         """Draw a filled rectangle in an actual filament color, e.g. '#RRGGBB' or 'RRGGBB'."""
