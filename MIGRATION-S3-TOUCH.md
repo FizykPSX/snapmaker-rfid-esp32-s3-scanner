@@ -1,61 +1,62 @@
-# Plan migracji: ESP32-C6-LCD-1.47 → Waveshare ESP32-S3-Touch-LCD-2
+# Plan migracji: ESP32-C6-LCD-1.47 (MicroPython) → Waveshare ESP32-S3-Touch-LCD-2 (ESPHome)
 
-## Dlaczego
+## Dlaczego zmiana płytki
 
 ESP32-C6 jest jednordzeniowy — WiFi dzieli jeden rdzeń z całą resztą kodu (SPI do ekranu, I2C do RFID), co powodowało uporczywe, sporadyczne timeouty `socket.connect()` przy zapytaniach do Spoolmana zaraz po odczycie RFID. Testowaliśmy wszystkie standardowe obejścia (throttling odświeżania, retry, dłuższe opóźnienia, wyłączenie WiFi power-save) — problem został złagodzony, ale nie wyeliminowany do zera. **ESP32-S3 jest dwurdzeniowy** — WiFi może mieć dedykowany rdzeń, niezależny od tego jak bardzo drugi rdzeń jest zajęty naszym kodem. To rozwiązuje problem architekturalnie, nie łatkami.
 
 Przy okazji: **dotyk pojemnościowy (CST816D) zastępuje fizyczne przyciski** — nie trzeba nic lutować poza samym PN532.
 
+## Dlaczego zmiana frameworku (MicroPython → ESPHome)
+
+Większość czasu spędzonego na obecnej płytce poszła na debugowanie niskopoziomowych problemów naszego własnego, minimalnego sterownika ST7789 w MicroPythonie (tryb SPI, endianness `framebuf`, uszkodzone transfery przy pełnej szerokości, budżet pamięci na bufory). ESPHome ma to już rozwiązane w dojrzałych, testowanych przez tysiące userów komponentach:
+
+- **`pn532_i2c`** — gotowy komponent RFID, obsługuje Mifare Classic, czytanie bloków, parsowanie rekordów NDEF/tekstowych (`on_tag`). Potencjalnie zdejmuje z nas całe ręczne parsowanie TLV/NDEF z obecnego `rfid.py`/`PN532.py` — **do zweryfikowania na żywym sprzęcie**, czy poradzi sobie z naszym konkretnym formatem JSON w rekordzie tekstowym.
+- **WiFi** — jedna z flagowych mocnych stron ESPHome, dokładnie nasz dzisiejszy ból.
+- **LVGL + dotyk (CST816)** — oficjalne wsparcie, są gotowe configi społeczności dla podobnych płytek Waveshare S3 z dotykiem.
+- **`http_request`** — komponent do GET/POST, załatwia komunikację ze Spoolmanem i drukarką.
+- **Integracja z Home Assistant** — natywna, użytkownik ma HA.
+
+Nasza logika (stan 4 kanałów, przewijający się tekst, panel szczegółów z próbką koloru, kolejność spool_id→UID w Spoolmanie, wysyłka do drukarki) jest dość specyficzna i będzie wymagać sporo `lambda:` (C++ wklejony w YAML) — to nie będzie w 100% czysto deklaratywne, ale zdejmuje z nas pisanie sterowników od zera.
+
+**Plan B**, gdyby ESPHome okazał się zbyt ograniczający dla naszej logiki: czyste **Arduino/PlatformIO + TFT_eSPI/LVGL + Adafruit_PN532** — też mature biblioteki, więcej kontroli, więcej własnego kodu.
+
 ## Docelowy sprzęt
 
 **[Waveshare ESP32-S3-Touch-LCD-2](https://www.waveshare.com/esp32-s3-touch-lcd-2.htm)**
 - ESP32-S3R8, dwurdzeniowy LX7, 240MHz, 8MB PSRAM, 16MB flash
-- Ekran: 2", 240×320, IPS, sterownik **ST7789T3** (SPI) — ta sama rodzina co obecny ST7789, więc podejście z `st7789py.py` powinno się przenieść, ale piny/offsety/init trzeba będzie zweryfikować od zera na żywym sprzęcie
+- Ekran: 2", 240×320, IPS, sterownik **ST7789T3** (SPI)
 - Dotyk: **CST816D**, I2C
-- Bonus (niepotrzebne nam, ale obecne): IMU (QMI8658), złącze baterii
+- Bonus: IMU (QMI8658, niepotrzebne nam), złącze baterii MX1.25
 
-## Co przenosi się bez zmian
+## Co przenosi się (jako logika/koncepcja, nie 1:1 kod)
 
-- `PN532.py`, `rfid.py` — sterownik i logika RFID, I2C-agnostyczne co do pinów
-- `spoolman.py` — logika zapytań, cache'owanie po `spool_id`, retry
-- `printer.py` — wysyłka do Snapmakera
-- `data_validator.py`, `char_text_scroller.py`, `one_shot_timer.py`, `periodic_timer.py`
-- `config.py` / `config.json` — struktura, tylko nowe wartości pinów
-
-## Co trzeba zrobić od nowa
-
-1. **Bring-up wyświetlacza** — dokładnie ten sam proces diagnostyczny co poprzednio, tym razem *proaktywnie* wiedząc czego szukać:
-   - piny SPI (SCK/MOSI/DC/CS/RST/BL) — sprawdzić dokumentację, potem zweryfikować fizycznie
-   - tryb SPI (zacząć od Mode 0, sprawdzić inne jeśli czarny ekran)
-   - `xstart`/`ystart` offset dla panelu 240×320 (może być zerowy, bo to już "pełny" rozmiar sterownika ST7789, bez potrzeby centrowania jak przy 172-szerokim panelu)
-   - **Od razu testować przy pełnej szerokości/wysokości pojedynczym du≥żym `blit_buffer()`** — sprawdzić czy to konkretne urządzenie ma ten sam problem z uszkodzeniem przy pełnej szerokości, zanim zaimplementujemy obejście na sztywno
-   - **Od razu mierzyć czas `show()`** i użyć `framebuf.blit()` do ekstrakcji kawałków zamiast pętli Pythona — wiemy już że to jest properly szybkie podejście
-   - **Od razu pilnować budżetu pamięci** — nie alokować dużych buforów per-wywołanie, nie trzymać więcej niż jednego bufora paska na raz
-2. **Sterownik dotyku** — nowy plik, np. `touch.py`, driver dla CST816D po I2C (community drivery istnieją dla MicroPython, np. w projektach LVGL/CST816 — do zweryfikowania po otrzymaniu płytki)
-3. **UI pod dotyk zamiast przycisków** — `button_handler.py`/`event_wrapper.py` prawdopodobnie do wyrzucenia, zastąpione obsługą dotknięć w konkretne obszary ekranu (np. cały wiersz kanału = dotyk aktywuje ten kanał, przycisk "Send Data" jako osobny dotykalny obszar)
-4. **Przeprojektowanie layoutu pod 240×320** — inne proporcje niż obecny landscape 320×172, więcej miejsca pionowo. Prawdopodobnie zostajemy w orientacji portret (naturalna dla tego panelu) zamiast wymuszać landscape jak poprzednio (unikamy w ten sposób całej gimnastyki z MADCTL/MV/MX którą robiliśmy dla C6)
-5. **Zasilanie z baterii** — patrz niżej
-
-## Zasilanie z baterii LiPo (żeby nie trzymać na powerbanku)
-
-Potwierdzone z dokumentacji Waveshare:
-- Złącze: **MX1.25, 2-pin**, na pojedynczy ogniwo **3.7V Li-Po/Li-ion**
-- Zalecana pojemność: **≤2000mAh** (jedno ogniwo, nie podłączać kilku naraz)
-- Regulator 3.3V na płytce (ME6217C33M5G), obsługa ładowania na pokładzie
-
-**Niepewne, do zweryfikowania fizycznie po otrzymaniu płytki:** czy TEN konkretny model ma wbudowany przełącznik ON/OFF zasilania z baterii (niektóre płytki z tej samej rodziny Waveshare go mają, dokumentacja tego konkretnego modelu tego nie potwierdza jednoznacznie).
-
-**Rekomendacja niezależna od tego:** kup baterię LiPo z **wbudowanym przełącznikiem suwakowym na przewodzie** (bardzo standardowy, tani akcesorium — szukaj "LiPo battery with switch MX1.25" lub kup goły przełącznik suwakowy i wepnij go w przewód od baterii między ogniwem a złączem) — to gwarantuje kontrolę wł/wył niezależnie od tego czy płytka ma własny przełącznik.
-
-**Przed podłączeniem baterii:** zweryfikować multimetrem/schematem polaryzację złącza MX1.25 na tej konkretnej płytce — to nie jest w 100% ustandaryzowane między producentami, a odwrotna polaryzacja może uszkodzić płytkę.
+- Format tagów: OpenSpool-JSON (`brand`, `type`, `subtype`, `color_hex`, `spool_id`, ...) — parsowanie w `lambda:`
+- Logika Spoolman: `spool_id` najpierw (GET `/api/v1/spool/{id}`), fallback po `card_uids` extra field
+- Payload do drukarki Snapmaker (POST `/printer/filament_detect/set`)
+- Koncepcja UI: 4 kanały + Send Data + panel szczegółów z próbką koloru
 
 ## Kolejność prac po otrzymaniu sprzętu
 
-1. Zweryfikować pinout fizycznie (multimetr + dokumentacja, jak poprzednio)
-2. Zainstalować/zflashować MicroPython (ten sam `ESP32_GENERIC_S3` firmware)
-3. Bring-up ekranu (patrz lista wyżej) — celowo szybciej niż poprzednio, bo znamy już pułapki
-4. Bring-up dotyku (nowy element)
-5. Przenieść RFID/Spoolman/printer bez zmian, tylko nowe piny w configu
-6. Przeprojektować UI pod dotyk
-7. Test end-to-end, ze szczególnym naciskiem na powtórzenie testu "ciągła pętla renderowania + Spoolman" żeby potwierdzić że dwurdzeniowość faktycznie rozwiązuje problem
-8. Bateria + obudowa
+1. Zainstalować ESPHome (dodatek do Home Assistant albo CLI) i podstawowy config: WiFi + logi + OTA
+2. Zweryfikować pinout ekranu/dotyku fizycznie (multimetr + dokumentacja Waveshare, jak poprzednio)
+3. Bring-up ekranu (LVGL + sterownik ST7789) — sprawdzić od razu przy starcie: pełna szerokość jednym blitem (czy ten model ma ten sam problem co C6?), zużycie pamięci, czas odświeżania
+4. Bring-up dotyku (CST816D)
+5. Bring-up PN532 (`pn532_i2c`) — sprawdzić czy wbudowane parsowanie NDEF/tekstu poradzi sobie z naszym formatem JSON, czy potrzebny będzie własny lambda-parser
+6. UI w LVGL pod dotyk (zamiast przycisków fizycznych)
+7. `http_request` do Spoolmana i drukarki, logika spool_id→UID
+8. Integracja z Home Assistant (opcjonalnie: sensor stanu szpul, przycisk wysyłki)
+9. Test end-to-end, ze szczególnym naciskiem na powtórzenie testu "ciągła aktywność ekranu/RFID + zapytanie WiFi" żeby potwierdzić że dwurdzeniowość + ESPHome faktycznie rozwiązują problem z dzisiaj
+10. Bateria (patrz niżej) + obudowa
+
+## Zasilanie z baterii LiPo (żeby nie trzymać na powerbanku)
+
+Zamówiono: bateria **1000mAh**, przełącznik bistabilny (self-locking, DPDT, użyjemy jednej pary pinów) do wstawienia na przewód "+".
+
+Potwierdzone z dokumentacji Waveshare:
+- Złącze/pady: **MX1.25 / lutowane pady, 3.7V Li-Po/Li-ion, jedno ogniwo**
+- Limit: **≤2000mAh** (nie przekraczać, nie łączyć kilku ogniw)
+- Regulator 3.3V na płytce (ME6217C33M5G), obsługa ładowania na pokładzie
+
+**Przed lutowaniem:** zweryfikować multimetrem polaryzację padów "BAT"/"G" na fizycznie otrzymanej płytce (nie ufać samemu sitodrukowi) — podłączyć USB, zmierzyć napięcie DC między padami, potwierdzić który jest "+".
+
+Przełącznik bistabilny idzie w przewód "+" między ogniwem a płytką, nigdy nie przerywamy "-"/GND.
