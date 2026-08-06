@@ -22,8 +22,10 @@ class EventWrapper:
                 return Action.ACTIVATE
             elif event_1 != BtnEvent.NONE:
                 return Action.NEXT
+            return Action.NONE
         else:
             if event_1 == BtnEvent.LONG_PRESS:
                 return Action.ACTIVATE
             elif event_1 == BtnEvent.SHORT_PRESS:
                 return Action.NEXT
+            return Action.NONE

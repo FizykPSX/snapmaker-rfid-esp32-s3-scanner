@@ -19,5 +19,9 @@ def checkwlan():
 
 checkwlan()
 
-import webrepl
-webrepl.start()
+try:
+    import webrepl
+    webrepl.start()
+except Exception as e:
+    # Never let an unconfigured/broken webrepl stop main.py from starting.
+    print('webrepl not started:', e)
