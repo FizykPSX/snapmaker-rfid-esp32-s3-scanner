@@ -1,4 +1,5 @@
 import json
+import time
 
 from event_wrapper import Action
 from one_shot_timer import OneShotTimer
@@ -38,6 +39,11 @@ class ChannelControl:
                         self.last_data = {'payload': data, 'uid': uid, 'spoolman': None}
                         if self.spoolman_client is not None:
                             try:
+                                # Let the WiFi radio settle right after RFID/I2C
+                                # activity - button IRQs plus bus traffic here
+                                # were seen to stall the first connect() attempt
+                                # (SpoolmanClient retries internally too).
+                                time.sleep_ms(300)
                                 spool_id = json.loads(data).get('spool_id')
                                 self.last_data['spoolman'] = self.spoolman_client.find(bytes(uid).hex(), spool_id)
                             except Exception as e:

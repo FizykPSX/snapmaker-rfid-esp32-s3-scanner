@@ -1,6 +1,5 @@
 import socket
 import json
-import sys
 import time
 
 class SpoolmanClient:
@@ -33,6 +32,7 @@ class SpoolmanClient:
 
             status_line = response.split(b"\r\n", 1)[0]
             if b" 200 " not in status_line:
+                print("Spoolman non-200 response:", status_line, "(", len(response), "bytes total)")
                 return None
 
             body = response.split(b"\r\n\r\n", 1)[1]
@@ -41,19 +41,25 @@ class SpoolmanClient:
             if s:
                 s.close()
 
+    ATTEMPTS = 4
+    RETRY_DELAY_MS = 400
+
     def _get(self, path):
-        # WiFi can hiccup right after RFID/I2C activity - one retry is enough
-        # to ride out a transient failure without making a failed lookup feel
-        # any slower than the RFID read itself already is.
-        for attempt in (1, 2):
+        # The button GPIOs' IRQ handlers plus continuous LCD/RFID bus traffic
+        # in the main loop were seen (on hardware) to reliably stall the first
+        # 1-2 connect() attempts right after a read - a plain 2-try retry
+        # wasn't always enough under that load, so retry a few more times.
+        for attempt in range(1, self.ATTEMPTS + 1):
             try:
-                return self._get_once(path)
+                result = self._get_once(path)
             except Exception as e:
-                if attempt == 2:
-                    print("Error querying Spoolman:", e)
-                    sys.print_exception(e)
-                    return None
-                time.sleep_ms(300)
+                print("Spoolman request", attempt, "raised:", e)
+                result = None
+            if result is not None:
+                return result
+            if attempt < self.ATTEMPTS:
+                time.sleep_ms(self.RETRY_DELAY_MS)
+        return None
 
     @staticmethod
     def _summarize(spool):

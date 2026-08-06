@@ -50,15 +50,15 @@ class LCDDisplay:
         self._buf = bytearray(self.DISPLAY_WIDTH * self.DISPLAY_HEIGHT * 2)
         self._fb = framebuf.FrameBuffer(self._buf, self.DISPLAY_WIDTH, self.DISPLAY_HEIGHT, framebuf.RGB565)
 
-        # Pre-allocated once and reused every show() - extracting strips via
-        # FrameBuffer.blit() (C implementation) instead of a per-row Python copy
-        # loop turned a ~590ms redraw into ~50ms.
-        self._strips = []
-        for tx in range(0, self.DISPLAY_WIDTH, self.STRIP_WIDTH):
-            w = min(self.STRIP_WIDTH, self.DISPLAY_WIDTH - tx)
-            buf = bytearray(w * self.DISPLAY_HEIGHT * 2)
-            fb = framebuf.FrameBuffer(buf, w, self.DISPLAY_HEIGHT, framebuf.RGB565)
-            self._strips.append((tx, w, buf, fb))
+        # One strip buffer, reused sequentially for every strip in show().
+        # Four separate pre-allocated strips used ~220KB total and left too
+        # little heap for the WiFi stack (connect() started reliably
+        # ETIMEDOUT-ing once free memory dropped that low - verified on
+        # hardware). Extracting via FrameBuffer.blit() (C implementation)
+        # instead of a per-row Python copy loop is what makes this fast
+        # (~590ms/frame -> ~50ms/frame) even with a single reused buffer.
+        self._strip_buf = bytearray(self.STRIP_WIDTH * self.DISPLAY_HEIGHT * 2)
+        self._strip_fb = framebuf.FrameBuffer(self._strip_buf, self.STRIP_WIDTH, self.DISPLAY_HEIGHT, framebuf.RGB565)
 
         self.clear()
         self.show()
@@ -82,9 +82,10 @@ class LCDDisplay:
         self._fb.fill(0)
 
     def show(self):
-        for tx, w, buf, fb in self._strips:
-            fb.blit(self._fb, -tx, 0)
-            self.tft.blit_buffer(buf, tx, 0, w, self.DISPLAY_HEIGHT)
+        for tx in range(0, self.DISPLAY_WIDTH, self.STRIP_WIDTH):
+            w = min(self.STRIP_WIDTH, self.DISPLAY_WIDTH - tx)
+            self._strip_fb.blit(self._fb, -tx, 0)
+            self.tft.blit_buffer(self._strip_buf, tx, 0, w, self.DISPLAY_HEIGHT)
 
     def text(self, text, line=0, offset_x=0, color=None):
         self._fb.text(
