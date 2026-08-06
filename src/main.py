@@ -74,6 +74,15 @@ def render_detail_panel(selected_channel):
     display.show_message(spool_line, start_line=DETAIL_START_LINE + 2, clear=False, wrapped=False)
 
 
+# Redrawing everything unconditionally every ~30ms (the original cadence)
+# means the display is doing continuous SPI traffic essentially forever -
+# on hardware this was seen to make WiFi connect() (used for the Spoolman
+# lookup) fail far more often than when the display sits idle between
+# redraws. Button presses still redraw immediately; otherwise this throttles
+# to a cadence that's still smooth for the channel scroll animation (200ms).
+REDRAW_INTERVAL_MS = 150
+last_render = time.ticks_ms() - REDRAW_INTERVAL_MS  # force an initial render
+
 try:
     while True:
         action = event_wrapper.handle_event()
@@ -83,20 +92,26 @@ try:
             machine.soft_reset()
             break
 
-        display.show_message(APP_NAME, start_line=0, clear=False, wrapped=False, scale=2)
-
         for i, channel in enumerate(channels):
             selected = (cursor_position == i)
             channel.update(selected, action, rfid)
-            channel.render(selected)
 
-        send_data_selected = (cursor_position == 4)
-        send_data_text = "> Send Data" if send_data_selected else "  Send Data"
-        display.clear_text_bg(SEND_DATA_LINE)
-        display.show_message(send_data_text, start_line=SEND_DATA_LINE, clear=False)
+        now = time.ticks_ms()
+        if action != Action.NONE or time.ticks_diff(now, last_render) >= REDRAW_INTERVAL_MS:
+            last_render = now
 
-        selected_channel = channels[cursor_position] if cursor_position < len(channels) else None
-        render_detail_panel(selected_channel)
+            display.show_message(APP_NAME, start_line=0, clear=False, wrapped=False, scale=2)
+
+            for i, channel in enumerate(channels):
+                channel.render(cursor_position == i)
+
+            send_data_selected = (cursor_position == 4)
+            send_data_text = "> Send Data" if send_data_selected else "  Send Data"
+            display.clear_text_bg(SEND_DATA_LINE)
+            display.show_message(send_data_text, start_line=SEND_DATA_LINE, clear=False)
+
+            selected_channel = channels[cursor_position] if cursor_position < len(channels) else None
+            render_detail_panel(selected_channel)
 
         if action == Action.NEXT:
             cursor_position = (cursor_position + 1) % len(MENU_ITEMS)
