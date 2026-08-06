@@ -1,0 +1,23 @@
+{
+  "oled": {
+    "scl": 6,
+    "sda": 5,
+    "driver": "ssd1306"
+  },
+
+  "rfid": {
+    "scl": 1,
+    "sda": 2,
+    "debug": false
+  },
+
+  "button": {
+    "pin": 9,
+    "pin2": 8
+  },
+
+  "printer": {
+    "host": "IP_ADDRESS_OF_PRINTER",
+    "port": 7125
+  }
+}
