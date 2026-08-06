@@ -14,7 +14,7 @@ class SpoolmanClient:
         try:
             addr = socket.getaddrinfo(self.host, self.port)[0][-1]
             s = socket.socket()
-            s.settimeout(5)
+            s.settimeout(1.5)
             s.connect(addr)
             request = (
                 f"GET {path} HTTP/1.1\r\n"
