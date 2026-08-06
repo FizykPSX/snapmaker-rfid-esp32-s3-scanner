@@ -43,7 +43,7 @@ class ChannelControl:
                                 # activity - button IRQs plus bus traffic here
                                 # were seen to stall the first connect() attempt
                                 # (SpoolmanClient retries internally too).
-                                time.sleep_ms(300)
+                                time.sleep_ms(1500)
                                 spool_id = json.loads(data).get('spool_id')
                                 self.last_data['spoolman'] = self.spoolman_client.find(bytes(uid).hex(), spool_id)
                             except Exception as e:
