@@ -1,23 +1,36 @@
 {
-  "oled": {
-    "scl": 6,
-    "sda": 5,
-    "driver": "ssd1306"
+  "lcd": {
+    "sck": 7,
+    "mosi": 6,
+    "cs": 14,
+    "dc": 15,
+    "rst": 21,
+    "bl": 22,
+    "xstart": 0,
+    "ystart": 34,
+    "baudrate": 10000000
   },
 
   "rfid": {
-    "scl": 1,
-    "sda": 2,
+    "scl": 20,
+    "sda": 23,
     "debug": false
   },
 
   "button": {
-    "pin": 9,
-    "pin2": 8
+    "pin": 18,
+    "pin2": 19
   },
 
   "printer": {
     "host": "IP_ADDRESS_OF_PRINTER",
     "port": 7125
+  },
+
+  "spoolman": {
+    "enabled": false,
+    "host": "IP_ADDRESS_OF_SPOOLMAN",
+    "port": 7912,
+    "extra_field": "rfid_uid"
   }
 }

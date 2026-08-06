@@ -5,8 +5,8 @@ class Config:
         with open(path, "r") as f:
             self._cfg = json.load(f)
 
-    def oled(self):
-        return self._cfg["oled"]
+    def lcd(self):
+        return self._cfg["lcd"]
 
     def rfid(self):
         return self._cfg["rfid"]
@@ -19,3 +19,6 @@ class Config:
 
     def ui(self):
         return self._cfg["ui"]
+
+    def spoolman(self):
+        return self._cfg.get("spoolman", {"enabled": False})
