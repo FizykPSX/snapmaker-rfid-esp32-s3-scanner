@@ -1,6 +1,11 @@
 esphome:
   name: snapmaker-rfid-s3
   friendly_name: Snapmaker RFID Reader
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          id(pn532_hub)->stop_poller();
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -29,6 +34,41 @@ web_server:
   local: true
 
 logger:
+
+json:
+
+globals:
+  - id: cursor_position
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: pending_channel
+    type: int
+    restore_value: false
+    initial_value: '-1'
+  - id: scan_deadline_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  # Channel state: 0=empty, 1=reading, 2=data, 3=no_data
+  - id: channel_state
+    type: std::array<int, 4>
+    restore_value: false
+    initial_value: '{0, 0, 0, 0}'
+  - id: channel_payload
+    type: std::array<std::string, 4>
+    restore_value: false
+  - id: channel_uid
+    type: std::array<std::string, 4>
+    restore_value: false
+  - id: channel_weight
+    type: std::array<float, 4>
+    restore_value: false
+    initial_value: '{-1, -1, -1, -1}'
+  - id: channel_spool_checked
+    type: std::array<bool, 4>
+    restore_value: false
+    initial_value: '{false, false, false, false}'
 
 api:
   encryption:
@@ -68,21 +108,184 @@ i2c:
   scl: GPIO9
   frequency: 100kHz
 
+http_request:
+  timeout: 3s
+
 pn532_i2c:
+  id: pn532_hub
   update_interval: 1s
   on_tag:
     then:
       - lambda: |-
-          ESP_LOGI("rfid", "Tag UID: %s", x.c_str());
-          if (tag.has_ndef_message()) {
-            auto message = tag.get_ndef_message();
-            auto records = message->get_records();
-            for (auto &record : records) {
-              ESP_LOGI("rfid", "NDEF payload: %s", record->get_payload().c_str());
-            }
-          } else {
-            ESP_LOGI("rfid", "Tag has no NDEF message");
+          if (id(pending_channel) == -1) {
+            ESP_LOGI("rfid", "Tag %s scanned but no channel is waiting (select a channel and press OK first)", x.c_str());
+            return;
           }
+          int ch = id(pending_channel);
+          id(pending_channel) = -1;
+          id(pn532_hub)->stop_poller();
+          id(channel_uid)[ch] = x;
+
+          if (!tag.has_ndef_message()) {
+            id(channel_state)[ch] = 3;
+            ESP_LOGW("rfid", "Channel %d: tag %s has no NDEF message", ch + 1, x.c_str());
+            return;
+          }
+          auto message = tag.get_ndef_message();
+          auto records = message->get_records();
+          if (records.empty()) {
+            id(channel_state)[ch] = 3;
+            ESP_LOGW("rfid", "Channel %d: tag %s NDEF message has no records", ch + 1, x.c_str());
+            return;
+          }
+          std::string payload = records[0]->get_payload();
+          id(channel_payload)[ch] = payload;
+          id(channel_state)[ch] = 2;
+          id(channel_weight)[ch] = -1;
+          id(channel_spool_checked)[ch] = false;
+          ESP_LOGI("rfid", "Channel %d: tag %s -> %s", ch + 1, x.c_str(), payload.c_str());
+
+          std::string spool_id = "";
+          DynamicJsonDocument doc(512);
+          if (!deserializeJson(doc, payload) && !doc["spool_id"].isNull()) {
+            spool_id = doc["spool_id"].as<std::string>();
+          }
+          id(spoolman_lookup)->execute(ch, spool_id, x);
+
+interval:
+  - interval: 500ms
+    then:
+      - lambda: |-
+          if (id(pending_channel) != -1 && millis() > id(scan_deadline_ms)) {
+            int ch = id(pending_channel);
+            id(pending_channel) = -1;
+            id(pn532_hub)->stop_poller();
+            id(channel_state)[ch] = 3;
+            ESP_LOGI("rfid", "Channel %d: scan timed out, reader back to sleep", ch + 1);
+          }
+
+script:
+  - id: spoolman_lookup
+    mode: queued
+    parameters:
+      channel: int
+      spool_id: std::string
+      uid_hex: std::string
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(spoolman_host).state.empty();'
+          then:
+            - if:
+                condition:
+                  lambda: 'return !spool_id.empty();'
+                then:
+                  - http_request.get:
+                      url: !lambda |-
+                        return "http://" + id(spoolman_host).state + ":7912/api/v1/spool/" + spool_id;
+                      capture_response: true
+                      on_response:
+                        then:
+                          - lambda: |-
+                              id(channel_spool_checked)[channel] = true;
+                              id(channel_weight)[channel] = -1;
+                              if (response->status_code == 200) {
+                                DynamicJsonDocument doc(1024);
+                                if (!deserializeJson(doc, body)) {
+                                  id(channel_weight)[channel] = doc["remaining_weight"] | -1.0f;
+                                }
+                              }
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(channel_spool_checked)[channel] = true;
+                              id(channel_weight)[channel] = -1;
+                else:
+                  - http_request.get:
+                      url: !lambda |-
+                        return "http://" + id(spoolman_host).state + ":7912/api/v1/spool?allow_archived=false";
+                      capture_response: true
+                      on_response:
+                        then:
+                          - lambda: |-
+                              id(channel_spool_checked)[channel] = true;
+                              id(channel_weight)[channel] = -1;
+                              if (response->status_code != 200) return;
+                              DynamicJsonDocument doc(4096);
+                              if (deserializeJson(doc, body)) return;
+                              std::string uid_lower = uid_hex;
+                              std::transform(uid_lower.begin(), uid_lower.end(), uid_lower.begin(), ::tolower);
+                              for (JsonObject spool : doc.as<JsonArray>()) {
+                                std::string uids = spool["extra"]["card_uids"] | "";
+                                std::string uids_lower = uids;
+                                std::transform(uids_lower.begin(), uids_lower.end(), uids_lower.begin(), ::tolower);
+                                if (!uids.empty() && uids_lower.find(uid_lower) != std::string::npos) {
+                                  id(channel_weight)[channel] = spool["remaining_weight"] | -1.0f;
+                                  break;
+                                }
+                              }
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(channel_spool_checked)[channel] = true;
+                              id(channel_weight)[channel] = -1;
+
+  - id: send_to_printer
+    mode: queued
+    parameters:
+      channel: int
+    then:
+      - if:
+          condition:
+            lambda: 'return id(channel_state)[channel] == 2 && !id(printer_host).state.empty();'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  return "http://" + id(printer_host).state + ":7125/printer/filament_detect/set";
+                request_headers:
+                  Content-Type: application/json
+                capture_response: true
+                body: !lambda |-
+                  DynamicJsonDocument in_doc(512);
+                  deserializeJson(in_doc, id(channel_payload)[channel]);
+                  DynamicJsonDocument out_doc(512);
+                  out_doc["channel"] = channel;
+                  JsonObject info = out_doc.createNestedObject("info");
+                  if (!in_doc["brand"].isNull()) info["VENDOR"] = in_doc["brand"].as<std::string>();
+                  if (!in_doc["type"].isNull()) info["MAIN_TYPE"] = in_doc["type"].as<std::string>();
+                  if (!in_doc["subtype"].isNull()) info["SUB_TYPE"] = in_doc["subtype"].as<std::string>();
+                  if (!in_doc["color_hex"].isNull()) {
+                    std::string hexstr = in_doc["color_hex"].as<std::string>();
+                    if (!hexstr.empty() && hexstr[0] == '#') hexstr = hexstr.substr(1);
+                    info["RGB_1"] = (long) strtol(hexstr.c_str(), nullptr, 16);
+                  }
+                  if (!in_doc["alpha"].isNull()) info["ALPHA"] = in_doc["alpha"];
+                  if (!in_doc["min_temp"].isNull()) info["HOTEND_MIN_TEMP"] = in_doc["min_temp"].as<std::string>();
+                  if (!in_doc["max_temp"].isNull()) info["HOTEND_MAX_TEMP"] = in_doc["max_temp"].as<std::string>();
+                  if (!in_doc["bed_min_temp"].isNull()) info["BED_TEMP"] = in_doc["bed_min_temp"].as<std::string>();
+                  {
+                    JsonArray uid_arr = info.createNestedArray("CARD_UID");
+                    std::string uid_str = id(channel_uid)[channel];
+                    for (size_t pos = 0; pos + 1 < uid_str.length(); pos += 3) {
+                      uid_arr.add((int) strtol(uid_str.substr(pos, 2).c_str(), nullptr, 16));
+                    }
+                  }
+                  std::string out;
+                  serializeJson(out_doc, out);
+                  ESP_LOGI("printer", "Sending channel %d: %s", channel + 1, out.c_str());
+                  return out;
+                on_response:
+                  then:
+                    - lambda: |-
+                        ESP_LOGI("printer", "Channel %d response %d: %s", channel + 1, response->status_code, body.c_str());
+                on_error:
+                  then:
+                    - logger.log:
+                        format: "Printer request failed for channel %d"
+                        args: ["channel + 1"]
+          else:
+            - lambda: |-
+                ESP_LOGW("printer", "Skipping channel %d: no data or printer_host not set", channel + 1);
 
 binary_sensor:
   - platform: gpio
@@ -92,6 +295,11 @@ binary_sensor:
       number: GPIO4
       mode: INPUT_PULLUP
       inverted: true
+    on_press:
+      then:
+        - lambda: |-
+            id(cursor_position) = (id(cursor_position) + 4) % 5;
+            ESP_LOGI("ui", "Button Up pressed, cursor now %d", id(cursor_position));
 
   - platform: gpio
     id: button_down
@@ -100,6 +308,11 @@ binary_sensor:
       number: GPIO5
       mode: INPUT_PULLUP
       inverted: true
+    on_press:
+      then:
+        - lambda: |-
+            id(cursor_position) = (id(cursor_position) + 1) % 5;
+            ESP_LOGI("ui", "Button Down pressed, cursor now %d", id(cursor_position));
 
   - platform: gpio
     id: button_ok
@@ -108,11 +321,40 @@ binary_sensor:
       number: GPIO6
       mode: INPUT_PULLUP
       inverted: true
+    on_press:
+      then:
+        - lambda: |-
+            int cp = id(cursor_position);
+            ESP_LOGI("ui", "Button OK pressed, cursor at %d", cp);
+            if (cp < 4) {
+              if (id(channel_state)[cp] == 2) {
+                ESP_LOGI("ui", "Channel %d: clearing data", cp + 1);
+                id(channel_state)[cp] = 0;
+                id(channel_payload)[cp] = "";
+                id(channel_uid)[cp] = "";
+                id(channel_weight)[cp] = -1;
+                id(channel_spool_checked)[cp] = false;
+              } else {
+                ESP_LOGI("ui", "Channel %d: arming for scan", cp + 1);
+                id(channel_state)[cp] = 1;
+                id(pending_channel) = cp;
+                id(scan_deadline_ms) = millis() + 10000;
+                id(pn532_hub)->start_poller();
+              }
+            } else {
+              ESP_LOGI("ui", "Send Data pressed");
+              for (int i = 0; i < 4; i++) {
+                if (id(channel_state)[i] == 2) {
+                  ESP_LOGI("ui", "Sending channel %d", i + 1);
+                  id(send_to_printer)->execute(i);
+                }
+              }
+            }
 
 font:
   - file: "gfonts://Roboto"
     id: font_default
-    size: 20
+    size: 14
 
 display:
   - platform: st7789v
@@ -121,6 +363,61 @@ display:
     dc_pin: GPIO41
     reset_pin: GPIO39
     backlight_pin: GPIO46
+    update_interval: 1s
     lambda: |-
-      it.print(10, 10, id(font_default), "Snapmaker RFID S3");
-      it.print(10, 40, id(font_default), "Display bring-up OK");
+      int cp = id(cursor_position);
+      it.print(4, 2, id(font_default), "Snapmaker RFID");
+
+      const char *labels[4] = {"CH1", "CH2", "CH3", "CH4"};
+      for (int i = 0; i < 4; i++) {
+        std::string line = (cp == i) ? "> " : "  ";
+        line += labels[i];
+        line += " ";
+        int st = id(channel_state)[i];
+        if (st == 1) {
+          uint32_t now = millis();
+          uint32_t remaining_ms = (id(scan_deadline_ms) > now) ? (id(scan_deadline_ms) - now) : 0;
+          line += "scan... " + std::to_string(remaining_ms / 1000 + 1) + "s";
+        } else if (st == 2) {
+          DynamicJsonDocument doc(512);
+          if (!deserializeJson(doc, id(channel_payload)[i])) {
+            std::string brand = doc["brand"] | "";
+            std::string type = doc["type"] | "";
+            std::string color = doc["color_hex"] | "";
+            line += brand + " " + type;
+            if (!color.empty()) {
+              if (color[0] == '#') color = color.substr(1);
+              long rgb = strtol(color.c_str(), nullptr, 16);
+              uint8_t r = (rgb >> 16) & 0xFF;
+              uint8_t g = (rgb >> 8) & 0xFF;
+              uint8_t b = rgb & 0xFF;
+              it.filled_rectangle(280, 21 + i * 16, 12, 12, Color(r, g, b));
+            }
+          } else {
+            line += "Data";
+          }
+        } else if (st == 3) {
+          line += "No data";
+        }
+        it.print(4, 20 + i * 16, id(font_default), line.c_str());
+      }
+
+      std::string send_line = (cp == 4) ? "> Send Data" : "  Send Data";
+      it.print(4, 20 + 4 * 16, id(font_default), send_line.c_str());
+
+      if (cp < 4 && id(channel_state)[cp] == 2) {
+        std::string uid_line = "UID: " + id(channel_uid)[cp];
+        it.print(4, 104, id(font_default), uid_line.c_str());
+
+        std::string spool_line;
+        if (id(spoolman_host).state.empty()) {
+          spool_line = "Spoolman: off";
+        } else if (!id(channel_spool_checked)[cp]) {
+          spool_line = "Spoolman: ...";
+        } else if (id(channel_weight)[cp] < 0) {
+          spool_line = "Spoolman: not found";
+        } else {
+          spool_line = "Spoolman: " + std::to_string((int) id(channel_weight)[cp]) + "g left";
+        }
+        it.print(4, 122, id(font_default), spool_line.c_str());
+      }
