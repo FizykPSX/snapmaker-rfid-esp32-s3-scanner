@@ -19,6 +19,17 @@
 > ze szpuli — zero custom parsowania NDEF potrzebne, patrz niżej), 3 przyciski góra/dół/OK na
 > GPIO4/5/6, captive portal + lokalny panel web (`web_server: local: true`) do konfiguracji WiFi i
 > IP drukarki/Spoolmana bez rekompilacji. Config: `esphome/snapmaker-rfid-s3.yaml` w tym repo.
+>
+> **Status integracji (2026-08-08): działa end-to-end na żywym sprzęcie.** UI 4-kanałowe (góra/dół
+> nawiguje, OK uzbraja kanał z timeoutem 10s i licznikiem na ekranie, PN532 śpi poza tym oknem —
+> `stop_poller()`/`start_poller()` na komponencie), Spoolman lookup (spool_id → fallback UID po
+> `extra.card_uids`, tak jak w oryginale), wysyłka do drukarki przez `http_request.post` na
+> `/printer/filament_detect/set`. **Ważna pułapka znaleziona przy debugowaniu:** `CARD_UID` w
+> payloadzie do drukarki musi być tablicą liczb (bajtów UID), nie stringiem z myślnikami — firmware
+> (`SnapmakerU1-Extended-Firmware`, plik `filament_detect.py`) robi `[int(b) for b in CARD_UID]`,
+> więc string typu `"04-E5-43-4D-C7-2A-81"` wywala `invalid literal for int(): '-'`. Poprawny format:
+> `[4, 229, 67, 77, 199, 42, 129]`. Potwierdzone na żywo: drukarka realnie zmieniła przypisany
+> filament po wysyłce danych ze szpuli.
 
 ## Dlaczego zmiana płytki
 
