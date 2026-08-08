@@ -11,7 +11,8 @@ required to accept the remote RFID data.
 Originally forked from [wasikuss/snapmaker-u1-remote-rfid-reader](https://github.com/wasikuss/snapmaker-u1-remote-rfid-reader)
 (MicroPython, ESP32-C6) and later rewritten from scratch on **ESP32-S3 + ESPHome** — see
 [MIGRATION-S3-TOUCH.md](MIGRATION-S3-TOUCH.md) for why. This repo now contains only the ESP32-S3/
-ESPHome version.
+ESPHome version. Proposed back upstream as a new hardware variant:
+[wasikuss/snapmaker-u1-remote-rfid-reader#4](https://github.com/wasikuss/snapmaker-u1-remote-rfid-reader/issues/4).
 
 ## Hardware
 
@@ -81,3 +82,7 @@ below shows the tag UID and the Spoolman remaining weight (if matched).
 - [ ] Solder buttons permanently (currently loose wires on the bench)
 - [ ] Design and print an enclosure
 - [ ] Wire up the LiPo battery + bistable power switch (see [BOM.md](BOM.md))
+
+## License
+
+[MIT](LICENSE), same as the upstream project.
