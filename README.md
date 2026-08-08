@@ -1,5 +1,7 @@
 # Snapmaker U1 Remote RFID Reader — ESP32-S3 + PN532 (I2C) + Spoolman (ESPHome)
 
+Repo: [github.com/FizykPSX/snapmaker-rfid-esp32-s3-scanner](https://github.com/FizykPSX/snapmaker-rfid-esp32-s3-scanner)
+
 Reads OpenSpool-format RFID tags from filament spools and sends the data to a Snapmaker U1 3D
 printer over the network, with an optional [Spoolman](https://github.com/Donkie/Spoolman) lookup
 for remaining weight. On the printer side,
