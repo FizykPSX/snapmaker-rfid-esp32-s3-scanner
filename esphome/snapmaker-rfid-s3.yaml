@@ -1,0 +1,73 @@
+esphome:
+  name: snapmaker-rfid-s3
+  friendly_name: Snapmaker RFID Reader
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+  ap:
+    ssid: "Snapmaker-RFID-S3 Fallback"
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+spi:
+  clk_pin: GPIO40
+  mosi_pin: GPIO45
+
+i2c:
+  sda: GPIO8
+  scl: GPIO9
+  frequency: 100kHz
+
+pn532_i2c:
+  update_interval: 1s
+  on_tag:
+    then:
+      - lambda: |-
+          ESP_LOGI("rfid", "Tag UID: %s", x.c_str());
+          if (tag.has_ndef_message()) {
+            auto message = tag.get_ndef_message();
+            auto records = message->get_records();
+            for (auto &record : records) {
+              ESP_LOGI("rfid", "NDEF payload: %s", record->get_payload().c_str());
+            }
+          } else {
+            ESP_LOGI("rfid", "Tag has no NDEF message");
+          }
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_default
+    size: 20
+
+display:
+  - platform: st7789v
+    model: "Waveshare 1.47in 172X320"
+    cs_pin: GPIO42
+    dc_pin: GPIO41
+    reset_pin: GPIO39
+    backlight_pin: GPIO46
+    lambda: |-
+      it.print(10, 10, id(font_default), "Snapmaker RFID S3");
+      it.print(10, 40, id(font_default), "Display bring-up OK");
