@@ -19,6 +19,7 @@ psram:
   speed: 80MHz
 
 wifi:
+  id: wifi_component
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   power_save_mode: none
@@ -69,6 +70,11 @@ globals:
     type: std::array<bool, 4>
     restore_value: false
     initial_value: '{false, false, false, false}'
+  # Send result: 0=not sent this round, 1=ok, 2=fail
+  - id: send_result
+    type: std::array<int, 4>
+    restore_value: false
+    initial_value: '{0, 0, 0, 0}'
 
 api:
   encryption:
@@ -277,12 +283,13 @@ script:
                 on_response:
                   then:
                     - lambda: |-
+                        id(send_result)[channel] = (response->status_code == 200) ? 1 : 2;
                         ESP_LOGI("printer", "Channel %d response %d: %s", channel + 1, response->status_code, body.c_str());
                 on_error:
                   then:
-                    - logger.log:
-                        format: "Printer request failed for channel %d"
-                        args: ["channel + 1"]
+                    - lambda: |-
+                        id(send_result)[channel] = 2;
+                        ESP_LOGE("printer", "Printer request failed for channel %d", channel + 1);
           else:
             - lambda: |-
                 ESP_LOGW("printer", "Skipping channel %d: no data or printer_host not set", channel + 1);
@@ -334,9 +341,11 @@ binary_sensor:
                 id(channel_uid)[cp] = "";
                 id(channel_weight)[cp] = -1;
                 id(channel_spool_checked)[cp] = false;
+                id(send_result)[cp] = 0;
               } else {
                 ESP_LOGI("ui", "Channel %d: arming for scan", cp + 1);
                 id(channel_state)[cp] = 1;
+                id(send_result)[cp] = 0;
                 id(pending_channel) = cp;
                 id(scan_deadline_ms) = millis() + 10000;
                 id(pn532_hub)->start_poller();
@@ -346,6 +355,7 @@ binary_sensor:
               for (int i = 0; i < 4; i++) {
                 if (id(channel_state)[i] == 2) {
                   ESP_LOGI("ui", "Sending channel %d", i + 1);
+                  id(send_result)[i] = 0;
                   id(send_to_printer)->execute(i);
                 }
               }
@@ -354,7 +364,10 @@ binary_sensor:
 font:
   - file: "gfonts://Roboto"
     id: font_default
-    size: 14
+    size: 20
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 13
 
 display:
   - platform: st7789v
@@ -368,8 +381,12 @@ display:
       int cp = id(cursor_position);
       it.print(4, 2, id(font_default), "Snapmaker RFID");
 
+      bool wifi_ok = id(wifi_component).is_connected();
+      it.filled_circle(310, 11, 6, wifi_ok ? Color(0, 200, 0) : Color(200, 0, 0));
+
       const char *labels[4] = {"CH1", "CH2", "CH3", "CH4"};
       for (int i = 0; i < 4; i++) {
+        int row_y = 28 + i * 22;
         std::string line = (cp == i) ? "> " : "  ";
         line += labels[i];
         line += " ";
@@ -391,7 +408,7 @@ display:
               uint8_t r = (rgb >> 16) & 0xFF;
               uint8_t g = (rgb >> 8) & 0xFF;
               uint8_t b = rgb & 0xFF;
-              it.filled_rectangle(280, 21 + i * 16, 12, 12, Color(r, g, b));
+              it.filled_rectangle(270, row_y + 1, 18, 18, Color(r, g, b));
             }
           } else {
             line += "Data";
@@ -399,15 +416,25 @@ display:
         } else if (st == 3) {
           line += "No data";
         }
-        it.print(4, 20 + i * 16, id(font_default), line.c_str());
+        it.print(4, row_y, id(font_default), line.c_str());
       }
 
-      std::string send_line = (cp == 4) ? "> Send Data" : "  Send Data";
-      it.print(4, 20 + 4 * 16, id(font_default), send_line.c_str());
+      bool any_fail = false, any_ok = false;
+      for (int i = 0; i < 4; i++) {
+        if (id(channel_state)[i] == 2) {
+          if (id(send_result)[i] == 2) any_fail = true;
+          else if (id(send_result)[i] == 1) any_ok = true;
+        }
+      }
+      std::string send_label = "Send Data";
+      if (any_fail) send_label = "Send Data: FAIL";
+      else if (any_ok) send_label = "Send Data: OK";
+      std::string send_line = (cp == 4 ? "> " : "  ") + send_label;
+      it.print(4, 28 + 4 * 22, id(font_default), send_line.c_str());
 
       if (cp < 4 && id(channel_state)[cp] == 2) {
         std::string uid_line = "UID: " + id(channel_uid)[cp];
-        it.print(4, 104, id(font_default), uid_line.c_str());
+        it.print(4, 142, id(font_small), uid_line.c_str());
 
         std::string spool_line;
         if (id(spoolman_host).state.empty()) {
@@ -419,5 +446,5 @@ display:
         } else {
           spool_line = "Spoolman: " + std::to_string((int) id(channel_weight)[cp]) + "g left";
         }
-        it.print(4, 122, id(font_default), spool_line.c_str());
+        it.print(4, 158, id(font_small), spool_line.c_str());
       }
