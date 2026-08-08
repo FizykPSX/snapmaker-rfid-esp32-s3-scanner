@@ -20,6 +20,13 @@ wifi:
 
   ap:
     ssid: "Snapmaker-RFID-S3 Fallback"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+web_server:
+  version: 3
+  local: true
 
 logger:
 
@@ -30,6 +37,27 @@ api:
 ota:
   - platform: esphome
     password: !secret ota_password
+
+text:
+  - platform: template
+    name: "Printer Host"
+    id: printer_host
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    min_length: 0
+    max_length: 64
+
+  - platform: template
+    name: "Spoolman Host"
+    id: spoolman_host
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    min_length: 0
+    max_length: 64
 
 spi:
   clk_pin: GPIO40
@@ -55,6 +83,31 @@ pn532_i2c:
           } else {
             ESP_LOGI("rfid", "Tag has no NDEF message");
           }
+
+binary_sensor:
+  - platform: gpio
+    id: button_up
+    name: "Button Up"
+    pin:
+      number: GPIO4
+      mode: INPUT_PULLUP
+      inverted: true
+
+  - platform: gpio
+    id: button_down
+    name: "Button Down"
+    pin:
+      number: GPIO5
+      mode: INPUT_PULLUP
+      inverted: true
+
+  - platform: gpio
+    id: button_ok
+    name: "Button OK"
+    pin:
+      number: GPIO6
+      mode: INPUT_PULLUP
+      inverted: true
 
 font:
   - file: "gfonts://Roboto"
