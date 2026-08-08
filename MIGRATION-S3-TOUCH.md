@@ -12,6 +12,13 @@
 > - Reszta rozumowania (dual-core → koniec kolizji WiFi/SPI, ESPHome zamiast własnych sterowników)
 >   zostaje bez zmian — patrz sekcje niżej. Sekcje dot. LVGL/dotyku poniżej są nieaktualne w tej
 >   części, ale zostawione jako dokumentacja pierwotnego rozumowania.
+>
+> **Status bring-up (2026-08-08): potwierdzone na żywym sprzęcie.** WiFi (z `power_save_mode: none`,
+> bez śladu po problemach z C6), ekran ST7789 (`model: "Waveshare 1.47in 172X320"`, offset 34/0 z
+> ESPHome działa od razu poprawnie), PN532 przez I2C na GPIO8/GPIO9 (odczyt prawdziwego taga OpenSpool
+> ze szpuli — zero custom parsowania NDEF potrzebne, patrz niżej), 3 przyciski góra/dół/OK na
+> GPIO4/5/6, captive portal + lokalny panel web (`web_server: local: true`) do konfiguracji WiFi i
+> IP drukarki/Spoolmana bez rekompilacji. Config: `esphome/snapmaker-rfid-s3.yaml` w tym repo.
 
 ## Dlaczego zmiana płytki
 
@@ -23,7 +30,8 @@ Przy okazji: **dotyk pojemnościowy (CST816D) zastępuje fizyczne przyciski** �
 
 Większość czasu spędzonego na obecnej płytce poszła na debugowanie niskopoziomowych problemów naszego własnego, minimalnego sterownika ST7789 w MicroPythonie (tryb SPI, endianness `framebuf`, uszkodzone transfery przy pełnej szerokości, budżet pamięci na bufory). ESPHome ma to już rozwiązane w dojrzałych, testowanych przez tysiące userów komponentach:
 
-- **`pn532_i2c`** — gotowy komponent RFID, obsługuje Mifare Classic, czytanie bloków, parsowanie rekordów NDEF/tekstowych (`on_tag`). Potencjalnie zdejmuje z nas całe ręczne parsowanie TLV/NDEF z obecnego `rfid.py`/`PN532.py` — **do zweryfikowania na żywym sprzęcie**, czy poradzi sobie z naszym konkretnym formatem JSON w rekordzie tekstowym.
+- **`pn532_i2c`** — gotowy komponent RFID, obsługuje Mifare Classic, czytanie bloków, parsowanie rekordów NDEF/tekstowych (`on_tag`). Potencjalnie zdejmuje z nas całe ręczne parsowanie TLV/NDEF z obecnego `rfid.py`/`PN532.py`.
+  **Potwierdzone na żywym sprzęcie (2026-08-08):** prawdziwy tag ze szpuli (Mifare Ultralight) odczytany bezbłędnie, `pn532_i2c` samo sparsowało NDEF i zwróciło gotowy JSON: `{"protocol":"openspool","version":"1.0","type":"PETG","color_hex":"40AA98","brand":"SUNLU","min_temp":"190","max_temp":"220","spool_id":"9","subtype":"Basic"}`. Zero custom kodu parsującego potrzebne. (Losowa karta Mifare Classic z szuflady dała `Authentication failed` — to spodziewane, karta nie jest sformatowana pod NDEF, nie problem z configiem.)
 - **WiFi** — jedna z flagowych mocnych stron ESPHome, dokładnie nasz dzisiejszy ból.
 - **LVGL + dotyk (CST816)** — oficjalne wsparcie, są gotowe configi społeczności dla podobnych płytek Waveshare S3 z dotykiem.
 - **`http_request`** — komponent do GET/POST, załatwia komunikację ze Spoolmanem i drukarką.
