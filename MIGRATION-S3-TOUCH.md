@@ -1,4 +1,17 @@
-# Plan migracji: ESP32-C6-LCD-1.47 (MicroPython) → Waveshare ESP32-S3-Touch-LCD-2 (ESPHome)
+# Plan migracji: ESP32-C6-LCD-1.47 (MicroPython) → Waveshare ESP32-S3-LCD-1.47B (ESPHome)
+
+> **Update (2026-08-08):** faktycznie zamówiona i otrzymana płytka to **ESP32-S3-LCD-1.47B**, nie
+> ESP32-S3-Touch-LCD-2 opisany niżej jako "docelowy sprzęt". Różnice mają znaczenie:
+> - Ekran **1.47" 172×320** (jak na starej płytce C6), nie 2" 240×320.
+> - **Brak dotyku** — CST816D nie występuje na tej płytce. UI zostaje oparte o **fizyczne przyciski**
+>   (dokładnie jak na C6), nie LVGL+touch. Zamówione 400 tact switchy na zapas.
+> - Dodatkowo na pokładzie: **QMI8658 6-axis IMU** (niepotrzebny, ignorujemy) i gniazdo TF/SD (SDIO,
+>   zajmuje GPIO 14/15/16/17/18/21 — nieużywane w projekcie, ale trzeba pamiętać że te piny są zajęte).
+> - Potwierdzony pinout LCD z dokumentacji Waveshare: MOSI=45, SCLK=40, CS=42, DC=41, RST=39, BL=46.
+>   RGB LED (WS2812-style) na GPIO38.
+> - Reszta rozumowania (dual-core → koniec kolizji WiFi/SPI, ESPHome zamiast własnych sterowników)
+>   zostaje bez zmian — patrz sekcje niżej. Sekcje dot. LVGL/dotyku poniżej są nieaktualne w tej
+>   części, ale zostawione jako dokumentacja pierwotnego rozumowania.
 
 ## Dlaczego zmiana płytki
 
@@ -58,5 +71,7 @@ Potwierdzone z dokumentacji Waveshare:
 - Regulator 3.3V na płytce (ME6217C33M5G), obsługa ładowania na pokładzie
 
 **Przed lutowaniem:** zweryfikować multimetrem polaryzację padów "BAT"/"G" na fizycznie otrzymanej płytce (nie ufać samemu sitodrukowi) — podłączyć USB, zmierzyć napięcie DC między padami, potwierdzić który jest "+".
+
+**Update (2026-08-08):** oprócz zamówionej płaskiej 1000mAh, mamy też fizycznie na stanie 2x płaską 1000mAh i 2x 18650 2000mAh. Wszystkie mieszczą się w limicie ≤2000mAh/jedno ogniwo — **ale nadal tylko jedno ogniwo na raz**, nie łączyć dwóch cel równolegle/szeregowo. 18650 nie ma fabrycznego złącza pod pady płytki — potrzebny uchwyt/holder na 18650 i dolutowanie przewodów do padów "+"/"-", tak samo jak przy płaskiej baterii. Płaska 1000mAh jest wygodniejsza mechanicznie (mieści się w obudowie), 18650 da dłuższy czas pracy — decyzja do podjęcia na etapie projektowania obudowy.
 
 Przełącznik bistabilny idzie w przewód "+" między ogniwem a płytką, nigdy nie przerywamy "-"/GND.
