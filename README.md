@@ -128,8 +128,11 @@ panel below shows the tag UID and the Spoolman remaining weight (if matched).
 - **Variant A: touch row geometry is duplicated.** The `y_min`/`y_max` of the five touchscreen
   binary sensors must match the `ROW_H` / `ROW_Y0` / `SEND_Y` constants in the display lambda.
   Change one, change the other.
-- **Variant A: `invert_colors: true`.** ST7789 panels are split on this. If the screen comes up as
-  a photo negative, set it to `false`.
+- **Variant A: two colour knobs, not one.** `invert_colors: true` — ST7789 panels are split on
+  this, so if the screen comes up as a photo negative, set it to `false`. Separately, the
+  `ST7789V` model defaults to `color_order: BGR`; if red and blue are swapped (the CH colour
+  swatch is the giveaway) add `color_order: rgb`. A negative image and swapped channels are
+  different faults with different fixes — check which one you actually have before changing both.
 
 ## TODO
 
