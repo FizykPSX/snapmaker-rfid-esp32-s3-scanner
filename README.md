@@ -142,13 +142,17 @@ inline instead (`...` while checking, `n/a` if no match, `NNNg` if found) and on
   `ST7789V` model defaults to `color_order: BGR`; if red and blue are swapped (the CH colour
   swatch is the giveaway) add `color_order: rgb`. A negative image and swapped channels are
   different faults with different fixes — check which one you actually have before changing both.
+- **Variant A: battery ADC divider ratio confirmed at ~3.078:1.** GPIO5's on-board divider ratio
+  isn't documented by Waveshare. Measured on real hardware with USB disconnected (charging skews
+  the reading): a multimeter at the battery connector read 3.961V while the raw ADC read 1.287V.
+  Close enough to a clean 3:1 divider to just be one, plus resistor/ADC tolerance. The displayed
+  battery percentage is a straight-line 3.3–4.2V map, not a real LiPo discharge curve — good enough
+  for "roughly how full", not for a precise reading.
 
 ## TODO
 
 - [ ] Design and print an enclosure — screws + ~0.5mm clearance, not a press fit
 - [ ] Wire up the LiPo battery + bistable power switch (see [BOM.md](BOM.md))
-- [ ] Variant A: expose battery level (GPIO5 has an on-board divider; the ratio is undocumented,
-      so it needs measuring against a known cell voltage before it's worth showing)
 - [ ] Variant B: solder buttons permanently (currently loose wires on the bench)
 
 ## License

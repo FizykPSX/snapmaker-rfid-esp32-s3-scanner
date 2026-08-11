@@ -125,6 +125,25 @@ i2c:
     scl: GPIO17
     frequency: 100kHz
 
+sensor:
+  # Divider ratio measured on real hardware: multimeter at the battery
+  # connector read 3.961V while the ADC (undivided) read 1.287V -- 3.961/1.287
+  # = 3.078, close enough to a 3:1 divider to just be one plus resistor/ADC
+  # tolerance. Measured with USB disconnected (charging adds noise and skews
+  # the voltage above resting).
+  - platform: adc
+    pin: GPIO5
+    id: battery_voltage
+    name: "Battery Voltage"
+    device_class: voltage
+    state_class: measurement
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    update_interval: 10s
+    attenuation: 12db
+    filters:
+      - multiply: 3.078
+
 http_request:
   timeout: 3s
 
@@ -410,6 +429,15 @@ display:
       int cp = id(cursor_position);
 
       it.print(4, 2, id(font_default), "Snapmaker RFID");
+
+      // Coarse estimate, not a fuel-gauge curve: LiPo is ~3.3V empty, ~4.2V
+      // full, and the middle of the curve is flatter than this straight line.
+      // Good enough for "roughly how much is left", not for precise %.
+      int batt_pct = (int) roundf((id(battery_voltage).state - 3.3f) / (4.2f - 3.3f) * 100.0f);
+      if (batt_pct < 0) batt_pct = 0;
+      if (batt_pct > 100) batt_pct = 100;
+      std::string batt_line = std::to_string(batt_pct) + "%";
+      it.print(296, 2, id(font_small), TextAlign::TOP_RIGHT, batt_line.c_str());
 
       bool wifi_ok = id(wifi_component).is_connected();
       it.filled_circle(306, 10, 6, wifi_ok ? Color(0, 200, 0) : Color(200, 0, 0));
