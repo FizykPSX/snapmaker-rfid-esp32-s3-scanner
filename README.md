@@ -31,6 +31,9 @@ Variant A is the one to build if you're starting now: no buttons to solder, bigg
 battery charging is handled on-board. Variant B stays supported as the cheaper option and needs
 no touch calibration.
 
+**Variant A is confirmed working end-to-end on real hardware**: touch input, PN532 scan, Spoolman
+lookup, and the printer POST all round-trip correctly.
+
 Neither board is mechanically tough. The 1.47B's display sits on a folded FPC ribbon and cracks if
 the board is press-fitted into an enclosure — screw it down with clearance instead. See
 [BOM.md](BOM.md) for the full parts list.
@@ -98,10 +101,16 @@ GPIO4/5/6/8/9 were picked because they're free on this board and not strapping/S
 
 ### Variant A — touch
 
-Tap a row, that's it. No cursor to move.
+The top ~70% of the landscape frame (y=0–168) is the menu (CH1–CH4, Send Data) and is
+display-only — tapping it does nothing. The bottom 30% (y=168–240) is an invisible button strip
+split left/right at the midpoint; nothing is drawn there.
 
-- **Tap CH1–CH4**: arm that channel for a 10s scan, or clear it if it already has data.
-- **Tap "Send Data"**: send every channel that has data to the printer.
+- **Bottom-left**: cycle the highlighted row, CH1 → CH2 → CH3 → CH4 → Send Data → CH1 ...
+- **Bottom-right**: act on the highlighted row — arm it for a 10s scan, clear it if it already has
+  data, or (on "Send Data") send every channel that has data to the printer.
+
+Same select-then-confirm pattern as variant B's Up/Down/OK below, just moved onto two touch zones
+instead of three physical buttons — not a tap-any-row design.
 
 ### Variant B — buttons
 
@@ -109,8 +118,10 @@ Tap a row, that's it. No cursor to move.
 - **OK**: on a channel — arm it for a 10s scan, or clear it if it already has data; on "Send
   Data" — send every channel that has data to the printer.
 
-On both, after a successful scan the channel line shows brand/type and a color swatch; the detail
-panel below shows the tag UID and the Spoolman remaining weight (if matched).
+On both, after a successful scan the channel line shows brand/type and a color swatch. Variant B
+also shows a detail panel below with the tag UID and the Spoolman remaining weight; variant A has
+no room for that once the button strip takes the bottom 30%, so it appends the Spoolman result
+inline instead (`...` while checking, `n/a` if no match, `NNNg` if found) and only logs the UID.
 
 ## Known quirks (found the hard way, worth keeping in mind)
 
@@ -122,12 +133,10 @@ panel below shows the tag UID and the Spoolman remaining weight (if matched).
   power-save off avoids radio-doze connect flakiness regardless.
 - **Variant A: the touch panel is not rotated with the display.** The display runs `rotation: 90°`
   to get a 320×240 landscape frame; the CST816D still reports in its native 240×320 portrait
-  frame, so the `touchscreen: transform:` block does the mapping by hand. If taps land on the
-  wrong row on first boot, flip `mirror_x` / `mirror_y` there — that's the only calibration knob
-  this build needs.
-- **Variant A: touch row geometry is duplicated.** The `y_min`/`y_max` of the five touchscreen
-  binary sensors must match the `ROW_H` / `ROW_Y0` / `SEND_Y` constants in the display lambda.
-  Change one, change the other.
+  frame, so the `touchscreen: transform:` block does the mapping by hand. Confirmed on real
+  hardware: `swap_xy: true`, `mirror_x: false`, `mirror_y: true`. Found by logging raw
+  `touch.x`/`touch.y` from an `on_touch:` lambda and tapping known screen edges until the numbers
+  lined up — worth doing again if a different physical unit comes up mirrored.
 - **Variant A: two colour knobs, not one.** `invert_colors: true` — ST7789 panels are split on
   this, so if the screen comes up as a photo negative, set it to `false`. Separately, the
   `ST7789V` model defaults to `color_order: BGR`; if red and blue are swapped (the CH colour

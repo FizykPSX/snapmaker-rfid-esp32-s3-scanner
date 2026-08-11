@@ -306,33 +306,6 @@ script:
             - lambda: |-
                 ESP_LOGW("printer", "Skipping channel %d: no data or printer_host not set", channel + 1);
 
-  # One tap on a channel row does what Up/Down/OK did on the button build:
-  # select the row, then act on it.
-  - id: tap_channel
-    mode: single
-    parameters:
-      channel: int
-    then:
-      - lambda: |-
-          int cp = channel;
-          id(cursor_position) = cp;
-          if (id(channel_state)[cp] == 2) {
-            ESP_LOGI("ui", "Channel %d: clearing data", cp + 1);
-            id(channel_state)[cp] = 0;
-            id(channel_payload)[cp] = "";
-            id(channel_uid)[cp] = "";
-            id(channel_weight)[cp] = -1;
-            id(channel_spool_checked)[cp] = false;
-            id(send_result)[cp] = 0;
-          } else {
-            ESP_LOGI("ui", "Channel %d: arming for scan", cp + 1);
-            id(channel_state)[cp] = 1;
-            id(send_result)[cp] = 0;
-            id(pending_channel) = cp;
-            id(scan_deadline_ms) = millis() + 10000;
-            id(pn532_hub)->start_poller();
-          }
-
 touchscreen:
   - platform: cst816
     id: my_touch
@@ -343,95 +316,77 @@ touchscreen:
     # If taps land on the wrong row, flip mirror_x / mirror_y here.
     transform:
       swap_xy: true
-      mirror_x: true
+      mirror_x: false
+      mirror_y: true
+    on_touch:
+      - lambda: |-
+          ESP_LOGI("touch", "raw touch at x=%d y=%d", touch.x, touch.y);
 
 binary_sensor:
-  # Row geometry must match the display lambda below: 4 rows of 36px starting
-  # at y=26, then the Send row at y=172.
+  # Bottom 30% of the 320x240 landscape frame (y=168..240) is the button
+  # strip, split left/right at x=160. Everything above is display-only.
   - platform: touchscreen
     touchscreen_id: my_touch
-    id: touch_ch1
-    name: "Touch CH1"
+    id: touch_next
+    name: "Touch Next"
     x_min: 0
-    x_max: 319
-    y_min: 26
-    y_max: 61
-    on_press:
-      then:
-        - script.execute:
-            id: tap_channel
-            channel: 0
-
-  - platform: touchscreen
-    touchscreen_id: my_touch
-    id: touch_ch2
-    name: "Touch CH2"
-    x_min: 0
-    x_max: 319
-    y_min: 62
-    y_max: 97
-    on_press:
-      then:
-        - script.execute:
-            id: tap_channel
-            channel: 1
-
-  - platform: touchscreen
-    touchscreen_id: my_touch
-    id: touch_ch3
-    name: "Touch CH3"
-    x_min: 0
-    x_max: 319
-    y_min: 98
-    y_max: 133
-    on_press:
-      then:
-        - script.execute:
-            id: tap_channel
-            channel: 2
-
-  - platform: touchscreen
-    touchscreen_id: my_touch
-    id: touch_ch4
-    name: "Touch CH4"
-    x_min: 0
-    x_max: 319
-    y_min: 134
-    y_max: 169
-    on_press:
-      then:
-        - script.execute:
-            id: tap_channel
-            channel: 3
-
-  - platform: touchscreen
-    touchscreen_id: my_touch
-    id: touch_send
-    name: "Touch Send"
-    x_min: 0
-    x_max: 319
-    y_min: 172
-    y_max: 208
+    x_max: 159
+    y_min: 168
+    y_max: 239
     on_press:
       then:
         - lambda: |-
-            id(cursor_position) = 4;
-            ESP_LOGI("ui", "Send Data tapped");
-            for (int i = 0; i < 4; i++) {
-              if (id(channel_state)[i] == 2) {
-                ESP_LOGI("ui", "Sending channel %d", i + 1);
-                id(send_result)[i] = 0;
-                id(send_to_printer)->execute(i);
+            id(cursor_position) = (id(cursor_position) + 1) % 5;
+            ESP_LOGI("ui", "Next pressed, cursor now %d", id(cursor_position));
+
+  - platform: touchscreen
+    touchscreen_id: my_touch
+    id: touch_confirm
+    name: "Touch Confirm"
+    x_min: 160
+    x_max: 319
+    y_min: 168
+    y_max: 239
+    on_press:
+      then:
+        - lambda: |-
+            int cp = id(cursor_position);
+            ESP_LOGI("ui", "Confirm pressed, cursor at %d", cp);
+            if (cp < 4) {
+              if (id(channel_state)[cp] == 2) {
+                ESP_LOGI("ui", "Channel %d: clearing data", cp + 1);
+                id(channel_state)[cp] = 0;
+                id(channel_payload)[cp] = "";
+                id(channel_uid)[cp] = "";
+                id(channel_weight)[cp] = -1;
+                id(channel_spool_checked)[cp] = false;
+                id(send_result)[cp] = 0;
+              } else {
+                ESP_LOGI("ui", "Channel %d: arming for scan", cp + 1);
+                id(channel_state)[cp] = 1;
+                id(send_result)[cp] = 0;
+                id(pending_channel) = cp;
+                id(scan_deadline_ms) = millis() + 10000;
+                id(pn532_hub)->start_poller();
+              }
+            } else {
+              ESP_LOGI("ui", "Send Data pressed");
+              for (int i = 0; i < 4; i++) {
+                if (id(channel_state)[i] == 2) {
+                  ESP_LOGI("ui", "Sending channel %d", i + 1);
+                  id(send_result)[i] = 0;
+                  id(send_to_printer)->execute(i);
+                }
               }
             }
 
 font:
   - file: "gfonts://Roboto"
     id: font_default
-    size: 20
+    size: 16
   - file: "gfonts://Roboto"
     id: font_small
-    size: 13
+    size: 11
 
 display:
   - platform: mipi_spi
@@ -448,17 +403,16 @@ display:
     rotation: 90°
     update_interval: 1s
     lambda: |-
-      // 320x240 after rotation. Rows are 36px so a fingertip covers one row
-      // and only one row: the panel is ~40x30mm, so 36px is a little under 5mm.
-      const int ROW_H = 36;
-      const int ROW_Y0 = 26;
-      const int SEND_Y = 172;
+      // 320x240 after rotation. Bottom 30% (y=168..240) belongs to the touch
+      // button strip (see binary_sensor: below) — content stays above y=168.
+      const int ROW_H = 29;
+      const int ROW_Y0 = 22;
       int cp = id(cursor_position);
 
       it.print(4, 2, id(font_default), "Snapmaker RFID");
 
       bool wifi_ok = id(wifi_component).is_connected();
-      it.filled_circle(306, 12, 7, wifi_ok ? Color(0, 200, 0) : Color(200, 0, 0));
+      it.filled_circle(306, 10, 6, wifi_ok ? Color(0, 200, 0) : Color(200, 0, 0));
 
       const char *labels[4] = {"CH1", "CH2", "CH3", "CH4"};
       for (int i = 0; i < 4; i++) {
@@ -479,13 +433,22 @@ display:
             std::string type = doc["type"] | "";
             std::string color = doc["color_hex"] | "";
             line += brand + " " + type;
+            if (!id(spoolman_host).state.empty()) {
+              if (!id(channel_spool_checked)[i]) {
+                line += " ...";
+              } else if (id(channel_weight)[i] >= 0) {
+                line += " " + std::to_string((int) id(channel_weight)[i]) + "g";
+              } else {
+                line += " n/a";
+              }
+            }
             if (!color.empty()) {
               if (color[0] == '#') color = color.substr(1);
               long rgb = strtol(color.c_str(), nullptr, 16);
               uint8_t r = (rgb >> 16) & 0xFF;
               uint8_t g = (rgb >> 8) & 0xFF;
               uint8_t b = rgb & 0xFF;
-              it.filled_rectangle(288, row_y + 9, 18, 18, Color(r, g, b));
+              it.filled_rectangle(288, row_y + 6, 16, 16, Color(r, g, b));
             }
           } else {
             line += "Data";
@@ -493,7 +456,7 @@ display:
         } else if (st == 3) {
           line += "No data";
         }
-        it.print(4, row_y + 8, id(font_default), line.c_str());
+        it.print(4, row_y + 6, id(font_default), line.c_str());
       }
 
       bool any_fail = false, any_ok = false;
@@ -506,23 +469,7 @@ display:
       std::string send_label = "Send Data";
       if (any_fail) send_label = "Send Data: FAIL";
       else if (any_ok) send_label = "Send Data: OK";
-      it.rectangle(0, SEND_Y, 320, ROW_H, Color(60, 60, 60));
+      int send_y = ROW_Y0 + 4 * ROW_H;
+      it.rectangle(0, send_y, 320, ROW_H, Color(60, 60, 60));
       std::string send_line = (cp == 4 ? "> " : "  ") + send_label;
-      it.print(4, SEND_Y + 8, id(font_default), send_line.c_str());
-
-      if (cp < 4 && id(channel_state)[cp] == 2) {
-        std::string uid_line = "UID: " + id(channel_uid)[cp];
-        it.print(4, 210, id(font_small), uid_line.c_str());
-
-        std::string spool_line;
-        if (id(spoolman_host).state.empty()) {
-          spool_line = "Spoolman: off";
-        } else if (!id(channel_spool_checked)[cp]) {
-          spool_line = "Spoolman: ...";
-        } else if (id(channel_weight)[cp] < 0) {
-          spool_line = "Spoolman: not found";
-        } else {
-          spool_line = "Spoolman: " + std::to_string((int) id(channel_weight)[cp]) + "g left";
-        }
-        it.print(4, 224, id(font_small), spool_line.c_str());
-      }
+      it.print(4, send_y + 6, id(font_default), send_line.c_str());
