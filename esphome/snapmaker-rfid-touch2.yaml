@@ -1,0 +1,503 @@
+esphome:
+  name: snapmaker-rfid-touch2
+  friendly_name: Snapmaker RFID Reader (Touch)
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          id(pn532_hub)->stop_poller();
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+wifi:
+  id: wifi_component
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+  ap:
+    ssid: "Snapmaker-RFID-Touch2 Fallback"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+web_server:
+  version: 3
+  local: true
+
+logger:
+
+json:
+
+globals:
+  # Which row the detail panel describes. On the button build this was a movable
+  # cursor; here a tap sets it directly, so it only ever tracks the last tap.
+  - id: cursor_position
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: pending_channel
+    type: int
+    restore_value: false
+    initial_value: '-1'
+  - id: scan_deadline_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  # Channel state: 0=empty, 1=reading, 2=data, 3=no_data
+  - id: channel_state
+    type: std::array<int, 4>
+    restore_value: false
+    initial_value: '{0, 0, 0, 0}'
+  - id: channel_payload
+    type: std::array<std::string, 4>
+    restore_value: false
+  - id: channel_uid
+    type: std::array<std::string, 4>
+    restore_value: false
+  - id: channel_weight
+    type: std::array<float, 4>
+    restore_value: false
+    initial_value: '{-1, -1, -1, -1}'
+  - id: channel_spool_checked
+    type: std::array<bool, 4>
+    restore_value: false
+    initial_value: '{false, false, false, false}'
+  # Send result: 0=not sent this round, 1=ok, 2=fail
+  - id: send_result
+    type: std::array<int, 4>
+    restore_value: false
+    initial_value: '{0, 0, 0, 0}'
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+text:
+  - platform: template
+    name: "Printer Host"
+    id: printer_host
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    min_length: 0
+    max_length: 64
+
+  - platform: template
+    name: "Spoolman Host"
+    id: spoolman_host
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    min_length: 0
+    max_length: 64
+
+spi:
+  clk_pin: GPIO39
+  mosi_pin: GPIO38
+
+i2c:
+  # On-board bus: CST816D touch (0x15) + QMI8658 IMU (0x6B). Pulled up on-board.
+  - id: bus_touch
+    sda: GPIO48
+    scl: GPIO47
+    frequency: 400kHz
+  # PN532 gets its own bus. Its address (0x24) does not clash, but it stretches
+  # the clock hard enough to stall a shared bus — and touch is the only input
+  # on this build, so a wedged bus means no UI at all.
+  - id: bus_rfid
+    sda: GPIO18
+    scl: GPIO17
+    frequency: 100kHz
+
+sensor:
+  # Divider ratio measured on real hardware: multimeter at the battery
+  # connector read 3.961V while the ADC (undivided) read 1.287V -- 3.961/1.287
+  # = 3.078, close enough to a 3:1 divider to just be one plus resistor/ADC
+  # tolerance. Measured with USB disconnected (charging adds noise and skews
+  # the voltage above resting).
+  - platform: adc
+    pin: GPIO5
+    id: battery_voltage
+    name: "Battery Voltage"
+    device_class: voltage
+    state_class: measurement
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    update_interval: 10s
+    attenuation: 12db
+    filters:
+      - multiply: 3.078
+
+http_request:
+  timeout: 3s
+
+pn532_i2c:
+  id: pn532_hub
+  i2c_id: bus_rfid
+  update_interval: 1s
+  on_tag:
+    then:
+      - lambda: |-
+          if (id(pending_channel) == -1) {
+            ESP_LOGI("rfid", "Tag %s scanned but no channel is waiting (tap a channel first)", x.c_str());
+            return;
+          }
+          int ch = id(pending_channel);
+          id(pending_channel) = -1;
+          id(pn532_hub)->stop_poller();
+          id(channel_uid)[ch] = x;
+
+          if (!tag.has_ndef_message()) {
+            id(channel_state)[ch] = 3;
+            ESP_LOGW("rfid", "Channel %d: tag %s has no NDEF message", ch + 1, x.c_str());
+            return;
+          }
+          auto message = tag.get_ndef_message();
+          auto records = message->get_records();
+          if (records.empty()) {
+            id(channel_state)[ch] = 3;
+            ESP_LOGW("rfid", "Channel %d: tag %s NDEF message has no records", ch + 1, x.c_str());
+            return;
+          }
+          std::string payload = records[0]->get_payload();
+          id(channel_payload)[ch] = payload;
+          id(channel_state)[ch] = 2;
+          id(channel_weight)[ch] = -1;
+          id(channel_spool_checked)[ch] = false;
+          ESP_LOGI("rfid", "Channel %d: tag %s -> %s", ch + 1, x.c_str(), payload.c_str());
+
+          std::string spool_id = "";
+          DynamicJsonDocument doc(512);
+          if (!deserializeJson(doc, payload) && !doc["spool_id"].isNull()) {
+            spool_id = doc["spool_id"].as<std::string>();
+          }
+          id(spoolman_lookup)->execute(ch, spool_id, x);
+
+interval:
+  - interval: 500ms
+    then:
+      - lambda: |-
+          if (id(pending_channel) != -1 && millis() > id(scan_deadline_ms)) {
+            int ch = id(pending_channel);
+            id(pending_channel) = -1;
+            id(pn532_hub)->stop_poller();
+            id(channel_state)[ch] = 3;
+            ESP_LOGI("rfid", "Channel %d: scan timed out, reader back to sleep", ch + 1);
+          }
+
+script:
+  - id: spoolman_lookup
+    mode: queued
+    parameters:
+      channel: int
+      spool_id: std::string
+      uid_hex: std::string
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(spoolman_host).state.empty();'
+          then:
+            - if:
+                condition:
+                  lambda: 'return !spool_id.empty();'
+                then:
+                  - http_request.get:
+                      url: !lambda |-
+                        return "http://" + id(spoolman_host).state + ":7912/api/v1/spool/" + spool_id;
+                      capture_response: true
+                      on_response:
+                        then:
+                          - lambda: |-
+                              id(channel_spool_checked)[channel] = true;
+                              id(channel_weight)[channel] = -1;
+                              if (response->status_code == 200) {
+                                DynamicJsonDocument doc(1024);
+                                if (!deserializeJson(doc, body)) {
+                                  id(channel_weight)[channel] = doc["remaining_weight"] | -1.0f;
+                                }
+                              }
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(channel_spool_checked)[channel] = true;
+                              id(channel_weight)[channel] = -1;
+                else:
+                  - http_request.get:
+                      url: !lambda |-
+                        return "http://" + id(spoolman_host).state + ":7912/api/v1/spool?allow_archived=false";
+                      capture_response: true
+                      on_response:
+                        then:
+                          - lambda: |-
+                              id(channel_spool_checked)[channel] = true;
+                              id(channel_weight)[channel] = -1;
+                              if (response->status_code != 200) return;
+                              DynamicJsonDocument doc(4096);
+                              if (deserializeJson(doc, body)) return;
+                              std::string uid_lower = uid_hex;
+                              std::transform(uid_lower.begin(), uid_lower.end(), uid_lower.begin(), ::tolower);
+                              for (JsonObject spool : doc.as<JsonArray>()) {
+                                std::string uids = spool["extra"]["card_uids"] | "";
+                                std::string uids_lower = uids;
+                                std::transform(uids_lower.begin(), uids_lower.end(), uids_lower.begin(), ::tolower);
+                                if (!uids.empty() && uids_lower.find(uid_lower) != std::string::npos) {
+                                  id(channel_weight)[channel] = spool["remaining_weight"] | -1.0f;
+                                  break;
+                                }
+                              }
+                      on_error:
+                        then:
+                          - lambda: |-
+                              id(channel_spool_checked)[channel] = true;
+                              id(channel_weight)[channel] = -1;
+
+  - id: send_to_printer
+    mode: queued
+    parameters:
+      channel: int
+    then:
+      - if:
+          condition:
+            lambda: 'return id(channel_state)[channel] == 2 && !id(printer_host).state.empty();'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  return "http://" + id(printer_host).state + ":7125/printer/filament_detect/set";
+                request_headers:
+                  Content-Type: application/json
+                capture_response: true
+                body: !lambda |-
+                  DynamicJsonDocument in_doc(512);
+                  deserializeJson(in_doc, id(channel_payload)[channel]);
+                  DynamicJsonDocument out_doc(512);
+                  out_doc["channel"] = channel;
+                  JsonObject info = out_doc.createNestedObject("info");
+                  if (!in_doc["brand"].isNull()) info["VENDOR"] = in_doc["brand"].as<std::string>();
+                  if (!in_doc["type"].isNull()) info["MAIN_TYPE"] = in_doc["type"].as<std::string>();
+                  if (!in_doc["subtype"].isNull()) info["SUB_TYPE"] = in_doc["subtype"].as<std::string>();
+                  if (!in_doc["color_hex"].isNull()) {
+                    std::string hexstr = in_doc["color_hex"].as<std::string>();
+                    if (!hexstr.empty() && hexstr[0] == '#') hexstr = hexstr.substr(1);
+                    info["RGB_1"] = (long) strtol(hexstr.c_str(), nullptr, 16);
+                  }
+                  if (!in_doc["alpha"].isNull()) info["ALPHA"] = in_doc["alpha"];
+                  if (!in_doc["min_temp"].isNull()) info["HOTEND_MIN_TEMP"] = in_doc["min_temp"].as<std::string>();
+                  if (!in_doc["max_temp"].isNull()) info["HOTEND_MAX_TEMP"] = in_doc["max_temp"].as<std::string>();
+                  if (!in_doc["bed_min_temp"].isNull()) info["BED_TEMP"] = in_doc["bed_min_temp"].as<std::string>();
+                  {
+                    JsonArray uid_arr = info.createNestedArray("CARD_UID");
+                    std::string uid_str = id(channel_uid)[channel];
+                    for (size_t pos = 0; pos + 1 < uid_str.length(); pos += 3) {
+                      uid_arr.add((int) strtol(uid_str.substr(pos, 2).c_str(), nullptr, 16));
+                    }
+                  }
+                  std::string out;
+                  serializeJson(out_doc, out);
+                  ESP_LOGI("printer", "Sending channel %d: %s", channel + 1, out.c_str());
+                  return out;
+                on_response:
+                  then:
+                    - lambda: |-
+                        id(send_result)[channel] = (response->status_code == 200) ? 1 : 2;
+                        ESP_LOGI("printer", "Channel %d response %d: %s", channel + 1, response->status_code, body.c_str());
+                on_error:
+                  then:
+                    - lambda: |-
+                        id(send_result)[channel] = 2;
+                        ESP_LOGE("printer", "Printer request failed for channel %d", channel + 1);
+          else:
+            - lambda: |-
+                ESP_LOGW("printer", "Skipping channel %d: no data or printer_host not set", channel + 1);
+
+touchscreen:
+  - platform: cst816
+    id: my_touch
+    i2c_id: bus_touch
+    interrupt_pin: GPIO46
+    # The touch panel is not rotated with the display — this maps its native
+    # 240x320 portrait frame onto the 320x240 landscape one used for drawing.
+    # If taps land on the wrong row, flip mirror_x / mirror_y here.
+    transform:
+      swap_xy: true
+      mirror_x: false
+      mirror_y: true
+    on_touch:
+      - lambda: |-
+          ESP_LOGI("touch", "raw touch at x=%d y=%d", touch.x, touch.y);
+
+binary_sensor:
+  # Bottom 30% of the 320x240 landscape frame (y=168..240) is the button
+  # strip, split left/right at x=160. Everything above is display-only.
+  - platform: touchscreen
+    touchscreen_id: my_touch
+    id: touch_next
+    name: "Touch Next"
+    x_min: 0
+    x_max: 159
+    y_min: 168
+    y_max: 239
+    on_press:
+      then:
+        - lambda: |-
+            id(cursor_position) = (id(cursor_position) + 1) % 5;
+            ESP_LOGI("ui", "Next pressed, cursor now %d", id(cursor_position));
+
+  - platform: touchscreen
+    touchscreen_id: my_touch
+    id: touch_confirm
+    name: "Touch Confirm"
+    x_min: 160
+    x_max: 319
+    y_min: 168
+    y_max: 239
+    on_press:
+      then:
+        - lambda: |-
+            int cp = id(cursor_position);
+            ESP_LOGI("ui", "Confirm pressed, cursor at %d", cp);
+            if (cp < 4) {
+              if (id(channel_state)[cp] == 2) {
+                ESP_LOGI("ui", "Channel %d: clearing data", cp + 1);
+                id(channel_state)[cp] = 0;
+                id(channel_payload)[cp] = "";
+                id(channel_uid)[cp] = "";
+                id(channel_weight)[cp] = -1;
+                id(channel_spool_checked)[cp] = false;
+                id(send_result)[cp] = 0;
+              } else {
+                ESP_LOGI("ui", "Channel %d: arming for scan", cp + 1);
+                id(channel_state)[cp] = 1;
+                id(send_result)[cp] = 0;
+                id(pending_channel) = cp;
+                id(scan_deadline_ms) = millis() + 10000;
+                id(pn532_hub)->start_poller();
+              }
+            } else {
+              ESP_LOGI("ui", "Send Data pressed");
+              for (int i = 0; i < 4; i++) {
+                if (id(channel_state)[i] == 2) {
+                  ESP_LOGI("ui", "Sending channel %d", i + 1);
+                  id(send_result)[i] = 0;
+                  id(send_to_printer)->execute(i);
+                }
+              }
+            }
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_default
+    size: 16
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 11
+
+display:
+  - platform: mipi_spi
+    model: ST7789V
+    dimensions:
+      width: 240
+      height: 320
+    cs_pin: GPIO45
+    dc_pin: GPIO42
+    # Shared with the BOOT button — do not wire anything else to GPIO0.
+    reset_pin: GPIO0
+    enable_pin: GPIO1
+    invert_colors: true
+    rotation: 90°
+    update_interval: 1s
+    lambda: |-
+      // 320x240 after rotation. Bottom 30% (y=168..240) belongs to the touch
+      // button strip (see binary_sensor: below) — content stays above y=168.
+      const int ROW_H = 29;
+      const int ROW_Y0 = 22;
+      int cp = id(cursor_position);
+
+      it.print(4, 2, id(font_default), "Snapmaker RFID");
+
+      // Coarse estimate, not a fuel-gauge curve: LiPo is ~3.3V empty, ~4.2V
+      // full, and the middle of the curve is flatter than this straight line.
+      // Good enough for "roughly how much is left", not for precise %.
+      int batt_pct = (int) roundf((id(battery_voltage).state - 3.3f) / (4.2f - 3.3f) * 100.0f);
+      if (batt_pct < 0) batt_pct = 0;
+      if (batt_pct > 100) batt_pct = 100;
+      std::string batt_line = std::to_string(batt_pct) + "%";
+      it.print(296, 2, id(font_small), TextAlign::TOP_RIGHT, batt_line.c_str());
+
+      bool wifi_ok = id(wifi_component).is_connected();
+      it.filled_circle(306, 10, 6, wifi_ok ? Color(0, 200, 0) : Color(200, 0, 0));
+
+      const char *labels[4] = {"CH1", "CH2", "CH3", "CH4"};
+      for (int i = 0; i < 4; i++) {
+        int row_y = ROW_Y0 + i * ROW_H;
+        it.rectangle(0, row_y, 320, ROW_H, Color(60, 60, 60));
+        std::string line = (cp == i) ? "> " : "  ";
+        line += labels[i];
+        line += " ";
+        int st = id(channel_state)[i];
+        if (st == 1) {
+          uint32_t now = millis();
+          uint32_t remaining_ms = (id(scan_deadline_ms) > now) ? (id(scan_deadline_ms) - now) : 0;
+          line += "scan... " + std::to_string(remaining_ms / 1000 + 1) + "s";
+        } else if (st == 2) {
+          DynamicJsonDocument doc(512);
+          if (!deserializeJson(doc, id(channel_payload)[i])) {
+            std::string brand = doc["brand"] | "";
+            std::string type = doc["type"] | "";
+            std::string color = doc["color_hex"] | "";
+            line += brand + " " + type;
+            if (!id(spoolman_host).state.empty()) {
+              if (!id(channel_spool_checked)[i]) {
+                line += " ...";
+              } else if (id(channel_weight)[i] >= 0) {
+                line += " " + std::to_string((int) id(channel_weight)[i]) + "g";
+              } else {
+                line += " n/a";
+              }
+            }
+            if (!color.empty()) {
+              if (color[0] == '#') color = color.substr(1);
+              long rgb = strtol(color.c_str(), nullptr, 16);
+              uint8_t r = (rgb >> 16) & 0xFF;
+              uint8_t g = (rgb >> 8) & 0xFF;
+              uint8_t b = rgb & 0xFF;
+              it.filled_rectangle(288, row_y + 6, 16, 16, Color(r, g, b));
+            }
+          } else {
+            line += "Data";
+          }
+        } else if (st == 3) {
+          line += "No data";
+        }
+        it.print(4, row_y + 6, id(font_default), line.c_str());
+      }
+
+      bool any_fail = false, any_ok = false;
+      for (int i = 0; i < 4; i++) {
+        if (id(channel_state)[i] == 2) {
+          if (id(send_result)[i] == 2) any_fail = true;
+          else if (id(send_result)[i] == 1) any_ok = true;
+        }
+      }
+      std::string send_label = "Send Data";
+      if (any_fail) send_label = "Send Data: FAIL";
+      else if (any_ok) send_label = "Send Data: OK";
+      int send_y = ROW_Y0 + 4 * ROW_H;
+      it.rectangle(0, send_y, 320, ROW_H, Color(60, 60, 60));
+      std::string send_line = (cp == 4 ? "> " : "  ") + send_label;
+      it.print(4, send_y + 6, id(font_default), send_line.c_str());
