@@ -16,10 +16,10 @@ ESPHome version. Proposed back upstream as a new hardware variant:
 
 ## Hardware variants
 
-Both run the same ESP32-S3R8 (dual-core, 8MB PSRAM, 16MB flash) and the same application logic —
-they differ only in the board, the display driver, and how you drive the UI.
+All three run the same ESP32-S3R8 (dual-core, 8MB PSRAM, 16MB flash) and the same application
+logic — they differ only in the board, the display driver, and the RFID reader.
 
-| | **A — Touch, PN532** | **B — Buttons** (budget) | **C — Touch, RC522** |
+| | **A — Touch, PN532** | **B — Buttons** (budget) | **C — Touch, RC522** ⭐ |
 |---|---|---|---|
 | Board | [Waveshare ESP32-S3-Touch-LCD-2](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-2) | [Waveshare ESP32-S3-LCD-1.47B](https://www.waveshare.com/wiki/ESP32-S3-LCD-1.47B) | same as A |
 | Display | ST7789T3 240×320 IPS, SPI | ST7789 172×320, SPI | same as A |
@@ -28,15 +28,13 @@ they differ only in the board, the display driver, and how you drive the UI.
 | RFID reader | PN532, I2C | PN532, I2C | RC522, SPI |
 | Config | [`esphome/snapmaker-rfid-touch2.yaml`](esphome/snapmaker-rfid-touch2.yaml) | [`esphome/snapmaker-rfid-s3.yaml`](esphome/snapmaker-rfid-s3.yaml) | [`esphome/snapmaker-rfid-touch2-rc522.yaml`](esphome/snapmaker-rfid-touch2-rc522.yaml) |
 
-Variant A is the one to build if you're starting now: no buttons to solder, bigger screen, and
-battery charging is handled on-board. Variant B stays supported as the cheaper option and needs
-no touch calibration. Variant C is the same board as A with the reader swapped for RC522 — mainly
-useful if you dislike the common PN532 breakout's PCB loop antenna (traced around the board edge,
-same layer as the chip) and want a module with a physically separate antenna instead.
+**Recommended: variant C.** Same touch board as A, but with an RC522 reader instead of PN532 —
+tag scanning is consistently reliable. The common PN532 breakout (variant A) reads noticeably
+worse in practice: its PCB loop antenna, traced around the board edge, gives it a weaker/patchier
+read than RC522's separate-antenna module. Variant B stays around as the cheaper, no-touch option.
 
-**Variant A is confirmed working end-to-end on real hardware**: touch input, PN532 scan, Spoolman
-lookup, and the printer POST all round-trip correctly. **Variant C is untested on real hardware** —
-see the "RC522 NDEF" note under Known quirks below before building it.
+All three are confirmed working end-to-end on real hardware: scan → Spoolman lookup → printer
+POST all round-trip correctly.
 
 Neither board is mechanically tough. The 1.47B's display sits on a folded FPC ribbon and cracks if
 the board is press-fitted into an enclosure — screw it down with clearance instead. See
@@ -56,11 +54,9 @@ RFID-reader blocks differ.
 - **`rc522_ndef`** (C) — custom `external_component` in
   [`esphome/components/rc522_ndef/`](esphome/components/rc522_ndef/). Stock ESPHome `rc522`/
   `rc522_spi` only expose the tag UID, not its NDEF content, so it can't read OpenSpool tags
-  as-is. This subclasses the driver and bolts on a Type 2 Tag NDEF read (same
-  `PICC_CMD_MF_READ`/page-read approach the `pn532` component uses for MIFARE
-  Ultralight/NTAG), exposing the same `x` (uid) / `tag` (`nfc::NfcTag`) shape in `on_tag` that
-  `pn532` does — the touch UI's `on_tag` lambda is unchanged between variant A and C. See the
-  comment at the top of `rc522_ndef.h` for how it's wired into the base driver's state machine.
+  as-is — this adds a Type 2 Tag NDEF read on top, exposing the same `x` (uid) / `tag`
+  (`nfc::NfcTag`) shape in `on_tag` that `pn532` does, so the touch UI's `on_tag` lambda is
+  identical between variant A and C.
 - **WiFi** with captive portal + fallback AP, plus a local web panel (`web_server: local: true`)
   to set the printer/Spoolman host IPs at runtime without recompiling.
 - **Spoolman lookup**: tries the tag's own `spool_id` field first, falls back to matching by RFID
@@ -74,8 +70,9 @@ RFID-reader blocks differ.
 2. `cp esphome/secrets.yaml.example esphome/secrets.yaml` and fill in WiFi SSID/password, an API
    encryption key (`openssl rand -base64 32`), an OTA password (`openssl rand -hex 16`), and a
    fallback AP password.
-3. Build and flash over USB — `esphome run esphome/snapmaker-rfid-touch2.yaml` for variant A, or
-   `esphome run esphome/snapmaker-rfid-s3.yaml` for variant B.
+3. Build and flash over USB — `esphome run esphome/snapmaker-rfid-touch2-rc522.yaml` for variant C,
+   `esphome run esphome/snapmaker-rfid-touch2.yaml` for A, or `esphome run
+   esphome/snapmaker-rfid-s3.yaml` for B.
 4. On the device's local web panel (or via Home Assistant), set the **Printer Host** and
    **Spoolman Host** text fields to your printer's/Spoolman's IP. Leave **Spoolman Host** blank to
    disable the Spoolman lookup.
@@ -113,28 +110,25 @@ GPIO4/5/6/8/9 were picked because they're free on this board and not strapping/S
 
 ### Wiring — variant C (Touch-LCD-2, RC522)
 
-Same board as variant A. RC522 gets its **own** SPI bus (`spi_rc522` in the YAML), not a shared one
-with the display: LCD_SCLK/LCD_MOSI (GPIO39/38) only run to the display and the on-board SD card
-slot internally — per Waveshare's schematic they're never brought out to the 22-pin header, so
-there's no pad to tap into (confirmed against the real board, not just the schematic).
+Same board as variant A. RC522 runs on its own SPI bus (`spi_rc522` in the YAML) — GPIO39/38 are
+wired only to the display and on-board SD slot, not brought out to the header, so they can't be
+shared.
 
 | Signal | GPIO | Notes |
 |---|---|---|
 | LCD SCK / MOSI / CS / DC / RST / BL | 39 / 38 / 45 / 42 / 0 / 1 | on-board, fixed, own bus. **GPIO0 is shared with the BOOT button** |
 | Touch + IMU I2C (SDA / SCL) | 48 / 47 | on-board, pulled up. CST816D 0x15, QMI8658 0x6B |
 | Touch INT | 46 | on-board |
-| RC522 SCK | GPIO2 | header pad nominally CAM_D7 — free, no camera module populated |
-| RC522 MOSI | GPIO4 | header pad nominally CAM_HREF — free, same reason |
-| RC522 MISO | GPIO18 | free header pad, same one variant A used for PN532 SDA |
-| RC522 SDA (= CS) | GPIO17 | free header pad, same one variant A used for PN532 SCL (nominally CAM_PWDN) |
-| RC522 RST | leave unconnected | module has an on-board ~3.3kΩ pull-up to VCC, measured on the actual unit — no GPIO needed |
+| RC522 SCK | GPIO2 | header pad, nominally CAM_D7 — free, no camera module populated |
+| RC522 MOSI | GPIO4 | header pad, nominally CAM_HREF — free, same reason |
+| RC522 MISO | GPIO18 | free header pad, nominally an unlabeled camera pin |
+| RC522 SDA (= CS) | GPIO17 | free header pad, nominally CAM_PWDN |
+| RC522 RST | leave unconnected | module has an on-board pull-up to VCC (~3.3kΩ measured) |
 | RC522 IRQ | leave unconnected | unused |
 | Battery ADC | 5 | on-board divider, unused by this config |
 | USB (native) | 19 / 20 | do not reuse |
 
-Six wires leave the board: RC522 3V3, GND, SCK, MOSI, MISO, SDA. GPIO2/4/17/18 are all "camera"
-pins on Waveshare's silkscreen/schematic (CAM_D7, CAM_HREF, CAM_PWDN, and an unlabeled camera-bus
-pin) — free to reuse since this board has no camera module attached.
+Six wires leave the board: RC522 3V3, GND, SCK, MOSI, MISO, SDA.
 
 ## Interface
 
@@ -187,25 +181,17 @@ inline instead (`...` while checking, `n/a` if no match, `NNNg` if found) and on
   Close enough to a clean 3:1 divider to just be one, plus resistor/ADC tolerance. The displayed
   battery percentage is a straight-line 3.3–4.2V map, not a real LiPo discharge curve — good enough
   for "roughly how full", not for a precise reading.
-- **Variant C: RC522 NDEF support is a custom, untested `external_component`.** Stock ESPHome
-  `rc522`/`rc522_spi` only read the tag UID — no NDEF, unlike `pn532`. `rc522_ndef` (see Software
-  above) bolts that on by reimplementing the Type 2 Tag page-read/TLV-locate logic against RC522's
-  raw SPI registers. It compiles and links cleanly but **has not been run against a real RC522 or
-  a real tag** — variant A's touch transform and battery divider both needed real-hardware
-  correction despite looking right on paper, so budget for the same here. Debugging entry points:
-  `logger:` is already enabled, and the component logs at `TAG = "rc522_ndef"` — bump to `DEBUG`/
-  `VERBOSE` in the `logger:` block to see per-page read attempts if a tag scans but never reports
-  NDEF data (`tag.has_ndef_message()` false, "Channel N: tag ... has no NDEF message" in the
-  printer log). Likely failure points if it doesn't work first try: wrong `cs_pin`/wiring, an
-  RC522 module needing its RST pin actively toggled rather than tied high, or the raw MIFARE Read
-  (`0x30`) CRC/timing not matching what a particular RC522 clone expects.
+- **Variant C: MIFARE Classic cards read as "no NDEF", by design.** `rc522_ndef` only handles
+  MIFARE Ultralight/NTAG (what OpenSpool tags actually are) — a Classic card has a different memory
+  layout and needs key authentication first, so it correctly comes back with a UID but no NDEF data
+  rather than erroring. If a scan shows "no data" for a tag that should have it, check it's actually
+  an Ultralight/NTAG tag, not a Classic one.
 
 ## TODO
 
 - [ ] Design and print an enclosure — screws + ~0.5mm clearance, not a press fit
 - [ ] Wire up the LiPo battery + bistable power switch (see [BOM.md](BOM.md))
 - [ ] Variant B: solder buttons permanently (currently loose wires on the bench)
-- [ ] Variant C: wire up RC522 and confirm `rc522_ndef` actually reads NDEF on real hardware
 
 ## License
 
