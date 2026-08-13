@@ -343,7 +343,8 @@ touchscreen:
 
 binary_sensor:
   # Bottom 30% of the 320x240 landscape frame (y=168..240) is the button
-  # strip, split left/right at x=160. Everything above is display-only.
+  # strip, split left/right at x=160 (labelled "Cycle"/"OK" in display: below).
+  # Everything above is display-only.
   - platform: touchscreen
     touchscreen_id: my_touch
     id: touch_next
@@ -459,8 +460,10 @@ display:
           if (!deserializeJson(doc, id(channel_payload)[i])) {
             std::string brand = doc["brand"] | "";
             std::string type = doc["type"] | "";
+            std::string subtype = doc["subtype"] | "";
             std::string color = doc["color_hex"] | "";
             line += brand + " " + type;
+            if (!subtype.empty()) line += " " + subtype;
             if (!id(spoolman_host).state.empty()) {
               if (!id(channel_spool_checked)[i]) {
                 line += " ...";
@@ -501,3 +504,8 @@ display:
       it.rectangle(0, send_y, 320, ROW_H, Color(60, 60, 60));
       std::string send_line = (cp == 4 ? "> " : "  ") + send_label;
       it.print(4, send_y + 6, id(font_default), send_line.c_str());
+
+      // Bottom 30% (y=168-240) is the touch button strip -- labels for the two zones.
+      it.line(160, 168, 160, 240, Color(80, 80, 80));
+      it.print(80, 204, id(font_default), TextAlign::CENTER, "Cycle");
+      it.print(240, 204, id(font_default), TextAlign::CENTER, "OK");

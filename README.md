@@ -132,14 +132,14 @@ Six wires leave the board: RC522 3V3, GND, SCK, MOSI, MISO, SDA.
 
 ## Interface
 
-### Variant A — touch
+### Touch (variants A, C)
 
 The top ~70% of the landscape frame (y=0–168) is the menu (CH1–CH4, Send Data) and is
-display-only — tapping it does nothing. The bottom 30% (y=168–240) is an invisible button strip
-split left/right at the midpoint; nothing is drawn there.
+display-only — tapping it does nothing. The bottom 30% (y=168–240) is a two-zone button strip,
+split left/right at the midpoint and labelled **Cycle** / **OK**.
 
-- **Bottom-left**: cycle the highlighted row, CH1 → CH2 → CH3 → CH4 → Send Data → CH1 ...
-- **Bottom-right**: act on the highlighted row — arm it for a 10s scan, clear it if it already has
+- **Cycle** (left): move the highlighted row, CH1 → CH2 → CH3 → CH4 → Send Data → CH1 ...
+- **OK** (right): act on the highlighted row — arm it for a 10s scan, clear it if it already has
   data, or (on "Send Data") send every channel that has data to the printer.
 
 Same select-then-confirm pattern as variant B's Up/Down/OK below, just moved onto two touch zones
@@ -151,10 +151,11 @@ instead of three physical buttons — not a tap-any-row design.
 - **OK**: on a channel — arm it for a 10s scan, or clear it if it already has data; on "Send
   Data" — send every channel that has data to the printer.
 
-On both, after a successful scan the channel line shows brand/type and a color swatch. Variant B
-also shows a detail panel below with the tag UID and the Spoolman remaining weight; variant A has
-no room for that once the button strip takes the bottom 30%, so it appends the Spoolman result
-inline instead (`...` while checking, `n/a` if no match, `NNNg` if found) and only logs the UID.
+On both, after a successful scan the channel line shows brand/type/subtype and a color swatch.
+Variant B also shows a detail panel below with the tag UID and the Spoolman remaining weight;
+variants A/C have no room for that once the button strip takes the bottom 30%, so they append the
+Spoolman result inline instead (`...` while checking, `n/a` if no match, `NNNg` if found) and only
+log the UID.
 
 ## Known quirks (found the hard way, worth keeping in mind)
 
@@ -164,18 +165,18 @@ inline instead (`...` while checking, `n/a` if no match, `NNNg` if found) and on
 - **WiFi power-save is disabled** (`power_save_mode: none`). This board is dual-core so it doesn't
   suffer the single-core WiFi/SPI contention the old ESP32-C6 MicroPython build had, but leaving
   power-save off avoids radio-doze connect flakiness regardless.
-- **Variant A: the touch panel is not rotated with the display.** The display runs `rotation: 90°`
+- **Variant A/C: the touch panel is not rotated with the display.** The display runs `rotation: 90°`
   to get a 320×240 landscape frame; the CST816D still reports in its native 240×320 portrait
   frame, so the `touchscreen: transform:` block does the mapping by hand. Confirmed on real
   hardware: `swap_xy: true`, `mirror_x: false`, `mirror_y: true`. Found by logging raw
   `touch.x`/`touch.y` from an `on_touch:` lambda and tapping known screen edges until the numbers
   lined up — worth doing again if a different physical unit comes up mirrored.
-- **Variant A: two colour knobs, not one.** `invert_colors: true` — ST7789 panels are split on
+- **Variant A/C: two colour knobs, not one.** `invert_colors: true` — ST7789 panels are split on
   this, so if the screen comes up as a photo negative, set it to `false`. Separately, the
   `ST7789V` model defaults to `color_order: BGR`; if red and blue are swapped (the CH colour
   swatch is the giveaway) add `color_order: rgb`. A negative image and swapped channels are
   different faults with different fixes — check which one you actually have before changing both.
-- **Variant A: battery ADC divider ratio confirmed at ~3.078:1.** GPIO5's on-board divider ratio
+- **Variant A/C: battery ADC divider ratio confirmed at ~3.078:1.** GPIO5's on-board divider ratio
   isn't documented by Waveshare. Measured on real hardware with USB disconnected (charging skews
   the reading): a multimeter at the battery connector read 3.961V while the raw ADC read 1.287V.
   Close enough to a clean 3:1 divider to just be one, plus resistor/ADC tolerance. The displayed
