@@ -188,11 +188,6 @@ log the UID.
   rather than erroring. If a scan shows "no data" for a tag that should have it, check it's actually
   an Ultralight/NTAG tag, not a Classic one.
 
-## TODO
-
-- [ ] Design and print an enclosure — screws + ~0.5mm clearance, not a press fit
-- [ ] Wire up the LiPo battery + bistable power switch (see [BOM.md](BOM.md))
-- [ ] Variant B: solder buttons permanently (currently loose wires on the bench)
 
 ## License
 
